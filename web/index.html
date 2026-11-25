@@ -1,0 +1,395 @@
+<!DOCTYPE html>
+<html lang="id" data-theme="light">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>AeroRelief : Optimasi Rute Drone Logistik Medis (KKA ITS)</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="/static/styles.css" />
+</head>
+<body>
+  <header class="topbar">
+    <div class="container topbar-inner">
+      <div class="brand-group">
+        <div class="brand-mark" aria-hidden="true"></div>
+        <div>
+          <span class="brand-title">AeroRelief</span>
+          <span class="brand-sub">EK234201 KKA : Teknik Informatika ITS</span>
+        </div>
+      </div>
+
+      <nav class="nav-links" aria-label="Navigasi utama">
+        <a href="#simulasi">Simulasi Peta</a>
+        <a href="#analitik">Analitik Algoritma</a>
+        <a href="#video-demo">Video &amp; Materi</a>
+        <a href="#metodologi">Metodologi</a>
+      </nav>
+
+      <div class="header-actions">
+        <span id="engineModeBadge" class="status-pill" aria-live="polite">Memeriksa Server Python...</span>
+        <button id="themeToggleBtn" type="button" class="btn btn-ghost" aria-label="Ganti tema terang atau gelap">
+          Mode Malam
+        </button>
+        <button id="openVideoModalBtn" type="button" class="btn btn-outline">
+          Putar Video Demo
+        </button>
+      </div>
+    </div>
+  </header>
+
+  <main>
+    <!-- Hero / Briefing Header -->
+    <section class="briefing-strip">
+      <div class="container briefing-grid">
+        <div class="briefing-copy">
+          <h1>Optimasi Rute Pengiriman Logistik Medis Multi-Drone Pasca Bencana</h1>
+          <p id="scenarioDesc">
+            Sistem perencanaan rute dua tingkat berbasis Python: algoritma Informed Search (A*) mencari lintasan aman bebas zona bahaya di atas medan topografi, sementara Genetic Algorithm menyelesaikan penjadwalan armada multi-drone (VRPTW-BL).
+          </p>
+        </div>
+        <div class="scenario-bar">
+          <label for="scenarioSelect" class="field-label">Pilih Skenario Bencana Indonesia</label>
+          <select id="scenarioSelect" class="select-input">
+            <option value="semeru">1. Erupsi Gunung Semeru (Lumajang)</option>
+            <option value="cianjur">2. Gempa Bumi &amp; Longsor Cianjur</option>
+            <option value="demak">3. Banjir Bandang Karanganyar (Demak)</option>
+          </select>
+          <div class="kpi-row" id="heroKpiRow">
+            <div class="kpi-cell">
+              <span class="kpi-label">Total Jarak</span>
+              <strong class="kpi-value mono" id="kpiDistance">0.0 km</strong>
+            </div>
+            <div class="kpi-cell">
+              <span class="kpi-label">Waktu Selesai</span>
+              <strong class="kpi-value mono" id="kpiMakespan">0.0 mnt</strong>
+            </div>
+            <div class="kpi-cell">
+              <span class="kpi-label">Ketepatan Waktu</span>
+              <strong class="kpi-value mono" id="kpiOnTime">0%</strong>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Section 1: Interactive Tactical Simulation Console -->
+    <section id="simulasi" class="section-block">
+      <div class="container console-layout">
+        <!-- Left Control Panel -->
+        <aside class="control-panel" aria-label="Pengaturan parameter algoritma dan editor peta">
+          <div class="panel-header">
+            <h2>Konfigurasi AI Search</h2>
+            <button id="resetScenarioBtn" type="button" class="btn-link">Reset Peta</button>
+          </div>
+
+          <div class="control-group">
+            <label for="pathAlgoSelect" class="field-label">Algoritma Pencarian Jalur (Tier 1)</label>
+            <select id="pathAlgoSelect" class="select-input">
+              <option value="astar">A* Search (Informed, Admissible)</option>
+              <option value="ucs">Uniform Cost Search (Uninformed)</option>
+              <option value="greedy">Greedy Best-First Search</option>
+            </select>
+          </div>
+
+          <div class="control-group">
+            <label for="routingAlgoSelect" class="field-label">Algoritma Optimasi Armada (Tier 2)</label>
+            <select id="routingAlgoSelect" class="select-input">
+              <option value="ga">Genetic Algorithm (VRPTW-BL)</option>
+              <option value="sa">Simulated Annealing (Pembanding)</option>
+            </select>
+          </div>
+
+          <div class="slider-grid">
+            <div class="control-group">
+              <div class="slider-top">
+                <label for="numDronesRange" class="field-label">Jumlah Armada Drone</label>
+                <span class="mono val-badge" id="numDronesVal">3 UAV</span>
+              </div>
+              <input id="numDronesRange" type="range" min="1" max="4" step="1" value="3" />
+            </div>
+
+            <div class="control-group">
+              <div class="slider-top">
+                <label for="popSizeRange" class="field-label">Ukuran Populasi (GA)</label>
+                <span class="mono val-badge" id="popSizeVal">50</span>
+              </div>
+              <input id="popSizeRange" type="range" min="20" max="100" step="10" value="50" />
+            </div>
+
+            <div class="control-group">
+              <div class="slider-top">
+                <label for="generationsRange" class="field-label">Jumlah Generasi / Siklus</label>
+                <span class="mono val-badge" id="generationsVal">80</span>
+              </div>
+              <input id="generationsRange" type="range" min="20" max="140" step="10" value="80" />
+            </div>
+
+            <div class="control-group">
+              <div class="slider-top">
+                <label for="batteryRange" class="field-label">Batas Jarak Baterai (km)</label>
+                <span class="mono val-badge" id="batteryVal">80 km</span>
+              </div>
+              <input id="batteryRange" type="range" min="45" max="120" step="5" value="80" />
+            </div>
+
+            <div class="control-group">
+              <div class="slider-top">
+                <label for="payloadRange" class="field-label">Kapasitas Muatan (kg)</label>
+                <span class="mono val-badge" id="payloadVal">5.0 kg</span>
+              </div>
+              <input id="payloadRange" type="range" min="3.0" max="10.0" step="0.5" value="5.0" />
+            </div>
+          </div>
+
+          <div class="control-group">
+            <span class="field-label">Alat Editor Peta Interaktif</span>
+            <div class="tool-selector" role="group" aria-label="Pilih mode klik pada peta">
+              <button type="button" class="tool-btn active" data-tool="inspect">Inspeksi</button>
+              <button type="button" class="tool-btn" data-tool="add_camp">Tambah Posko</button>
+              <button type="button" class="tool-btn" data-tool="add_obstacle">Lukis Zona Terlarang</button>
+              <button type="button" class="tool-btn" data-tool="erase_obstacle">Hapus Rintangan</button>
+            </div>
+            <div class="editor-sub-actions">
+              <button id="clearCampsBtn" type="button" class="btn btn-subtle">Kosongkan Posko</button>
+            </div>
+          </div>
+
+          <label class="checkbox-row">
+            <input id="showExploredChk" type="checkbox" checked />
+            <span>Tampilkan Simpul Eksplorasi Search</span>
+          </label>
+
+          <button id="solveBtn" type="button" class="btn btn-primary btn-full">
+            Jalankan Optimasi Rute
+          </button>
+        </aside>
+
+        <!-- Right Map Stage -->
+        <div class="map-stage">
+          <!-- Loading / Error / Empty banners -->
+          <div id="loadingBanner" class="state-banner state-loading hidden" role="status" aria-live="polite">
+            <span class="spinner" aria-hidden="true"></span>
+            <span>Menjalankan perhitungan jalur Python A* dan optimasi armada...</span>
+          </div>
+
+          <div id="errorBanner" class="state-banner state-error hidden" role="alert">
+            <div>
+              <strong>Jalur Terblokir Zona Terlarang</strong>
+              <p id="errorMessage">Beberapa posko tidak dapat dijangkau.</p>
+            </div>
+            <button id="errorResetBtn" type="button" class="btn btn-outline">Pulihkan Skenario</button>
+          </div>
+
+          <div class="canvas-wrapper">
+            <canvas id="mapCanvas" width="960" height="680" aria-label="Peta topografi interaktif rute drone"></canvas>
+
+            <!-- Empty State Overlay -->
+            <div id="emptyOverlay" class="empty-overlay hidden">
+              <div class="empty-card">
+                <h3>Belum Ada Posko Darurat pada Peta</h3>
+                <p>Klik tombol "Tambah Posko" di panel kiri lalu klik peta untuk menempatkan posko baru, atau muat ulang skenario bawaan.</p>
+                <button id="emptyReloadBtn" type="button" class="btn btn-primary">Muat Ulang Posko Skenario</button>
+              </div>
+            </div>
+
+            <!-- Hover Tooltip -->
+            <div id="mapTooltip" class="map-tooltip hidden" role="status"></div>
+          </div>
+
+          <!-- Transport Playback Bar -->
+          <div class="transport-bar">
+            <div class="transport-buttons">
+              <button id="playPauseBtn" type="button" class="btn btn-primary">Putar</button>
+              <button id="replayBtn" type="button" class="btn btn-ghost">Ulangi</button>
+            </div>
+            <div class="scrubber-wrap">
+              <input id="timeScrubber" type="range" min="0" max="100" step="0.5" value="0" aria-label="Garis waktu simulasi penerbangan" />
+              <span id="clockReadout" class="mono clock-readout">00.0 / 00.0 mnt</span>
+            </div>
+            <div class="speed-group" role="group" aria-label="Kecepatan simulasi">
+              <button type="button" class="speed-btn" data-speed="0.5">0.5x</button>
+              <button type="button" class="speed-btn active" data-speed="1">1x</button>
+              <button type="button" class="speed-btn" data-speed="2">2x</button>
+              <button type="button" class="speed-btn" data-speed="4">4x</button>
+            </div>
+          </div>
+
+          <!-- Map Legend -->
+          <div class="legend-strip" id="legendStrip">
+            <span class="legend-item"><i class="swatch swatch-depot"></i> Base Depot</span>
+            <span class="legend-item"><i class="swatch swatch-crit"></i> Posko Kritis</span>
+            <span class="legend-item"><i class="swatch swatch-high"></i> Posko Tinggi</span>
+            <span class="legend-item"><i class="swatch swatch-ok"></i> Logistik Terkirim</span>
+            <span class="legend-item"><i class="swatch swatch-hazard"></i> Zona Terlarang</span>
+            <span class="legend-item"><i class="swatch swatch-explored"></i> Simpul Search</span>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Section 2: Analytics & Fleet Manifest -->
+    <section id="analitik" class="section-block section-alt">
+      <div class="container">
+        <div class="section-head">
+          <h2>Bukti Kinerja Algoritma &amp; Manifes Armada</h2>
+          <p>Seluruh metrik di bawah ini dihitung langsung oleh mesin pencarian Python pada skenario aktif.</p>
+        </div>
+
+        <div class="charts-grid">
+          <div class="chart-card">
+            <h3>Berapa Banyak Simpul yang Dihemat A* Dibandingkan Uniform Cost Search?</h3>
+            <canvas id="benchChartCanvas" width="600" height="290" aria-label="Grafik perbandingan simpul A*, UCS, dan Greedy BFS"></canvas>
+            <div id="benchSummaryTable" class="mini-table-wrap"></div>
+          </div>
+
+          <div class="chart-card">
+            <h3>Seberapa Cepat Biaya Rute Menurun Tiap Generasi? (GA vs Simulated Annealing)</h3>
+            <canvas id="convChartCanvas" width="600" height="290" aria-label="Grafik konvergensi Genetic Algorithm dan Simulated Annealing"></canvas>
+            <div id="convSummaryNote" class="chart-footnote"></div>
+          </div>
+        </div>
+
+        <div class="manifest-card">
+          <div class="manifest-head">
+            <div>
+              <h3>Jadwal &amp; Manifes Penerbangan Armada</h3>
+              <p>Klik baris armada untuk menyorot jalur terbang UAV tersebut pada peta di atas.</p>
+            </div>
+            <button id="clearFocusDroneBtn" type="button" class="btn btn-ghost hidden">Tampilkan Semua UAV</button>
+          </div>
+          <div class="table-responsive">
+            <table class="manifest-table">
+              <thead>
+                <tr>
+                  <th>Armada UAV</th>
+                  <th>Urutan Pengiriman (Depot &amp; Posko)</th>
+                  <th>Muatan</th>
+                  <th>Jarak &amp; Reload</th>
+                  <th>Waktu Selesai</th>
+                  <th>Status</th>
+                </tr>
+              </thead>
+              <tbody id="manifestBody"></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Section 3: HD Video Mockup & Downloads -->
+    <section id="video-demo" class="section-block">
+      <div class="container video-section-grid">
+        <div class="video-player-card">
+          <h2>Video Mockup Simulasi (1080p HD)</h2>
+          <p>Video demonstrasi alur kerja lengkap: inisialisasi peta Gunung Semeru, animasi ekspansi simpul A*, konvergensi Genetic Algorithm, hingga misi pengiriman multi-drone.</p>
+          <video id="mainDemoVideo" controls preload="metadata" poster="/media/video_poster.png">
+            <source src="/media/aerorelief_mockup_demo.mp4" type="video/mp4" />
+            Browser Anda tidak mendukung pemutar video HTML5.
+          </video>
+        </div>
+
+        <div class="downloads-card">
+          <h2>Materi Presentasi &amp; Berkas Mockup</h2>
+          <p>Siap digunakan untuk pengumpulan progress kelas KKA (slide presentasi, gambar resolusi tinggi, dan video demo).</p>
+          <ul class="download-list">
+            <li>
+              <div>
+                <strong>Deck Presentasi Progress KKA (.pptx)</strong>
+                <span>9 slide lengkap: judul, deskripsi, latar belakang, rumus A* &amp; GA, flowchart, mockup, dan referensi.</span>
+              </div>
+              <a href="/media/AeroRelief_Progress_KKA.pptx" download="AeroRelief_Progress_KKA.pptx" class="btn btn-primary">Unduh PPTX</a>
+            </li>
+            <li>
+              <div>
+                <strong>Video Mockup Simulasi (.mp4)</strong>
+                <span>Resolusi Full HD 1920x1080 (30 fps), berdurasi 22 detik.</span>
+              </div>
+              <a href="/media/aerorelief_mockup_demo.mp4" download="aerorelief_mockup_demo.mp4" class="btn btn-outline">Unduh MP4</a>
+            </li>
+            <li>
+              <div>
+                <strong>Screenshot Mockup Resolusi Tinggi (.png)</strong>
+                <span>Tangkapan antarmuka Mission Control untuk disematkan pada slide atau laporan.</span>
+              </div>
+              <a href="/media/mockup_simulation.png" download="mockup_simulation.png" class="btn btn-outline">Unduh PNG</a>
+            </li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <!-- Section 4: Methodology, Flowchart & References -->
+    <section id="metodologi" class="section-block section-alt">
+      <div class="container">
+        <div class="section-head">
+          <h2>Formulasi Matematis, Flowchart &amp; Referensi</h2>
+          <p>Landasan teoretis implementasi dua tingkat pada mata kuliah Konsep Kecerdasan Artifisial (EK234201).</p>
+        </div>
+
+        <div class="method-grid">
+          <article class="method-card">
+            <h3>Tier 1: Informed Search (Algoritma A*)</h3>
+            <p>Menghitung lintasan aman terpendek antara dua koordinat di atas peta topografi berhalangan.</p>
+            <div class="formula-box mono">
+              f(n) = g(n) + h(n)<br />
+              h(n) = sqrt((x2 - x1)^2 + (y2 - y1)^2)<br />
+              step_cost = dist_2D + max(0, delta_elevasi) * 0.004
+            </div>
+            <p class="method-note">Heuristik jarak Euclidean bersifat admissible (tidak pernah melebihi biaya sebenarnya), menjamin rute yang ditemukan optimal seperti Uniform Cost Search namun dengan simpul eksplorasi jauh lebih sedikit.</p>
+          </article>
+
+          <article class="method-card">
+            <h3>Tier 2: Local Search (Genetic Algorithm VRPTW-BL)</h3>
+            <p>Mengoptimalkan pembagian posko, urutan kunjungan, isi ulang baterai di depot, serta batas waktu urgensi.</p>
+            <div class="formula-box mono">
+              Obj = TotalCost + 0.35 * Makespan + 2.5 * Sum(UrgencyWeight * LateMin)<br />
+              Operator: Tournament (k=3) + Order Crossover (OX) + Swap / 2-Opt Mutation
+            </div>
+            <p class="method-note">Urgensi Posko KRITIS memiliki bobot penalti keterlambatan 4x lebih besar dibanding SEDANG sehingga drone otomatis memprioritaskan pasien gawat darurat.</p>
+          </article>
+        </div>
+
+        <div class="flowchart-showcase">
+          <h3>Diagram Alur Kerja Sistem (Two-Tier Pipeline)</h3>
+          <img src="/media/flowchart_sistem.png" alt="Diagram arsitektur dan alur kerja sistem AeroRelief A* dan Genetic Algorithm" />
+        </div>
+
+        <div class="references-card">
+          <h3>Daftar Referensi Ilmiah &amp; Kode Sumber</h3>
+          <ol>
+            <li>Dorling, K., Heinrichs, J., Messier, G. G., &amp; Magierowski, S. (2017). <em>Vehicle Routing Problems for Drone Delivery</em>. IEEE Transactions on Systems, Man, and Cybernetics: Systems, 47(1), 70-85. <a href="https://ieeexplore.ieee.org/document/7513397" target="_blank" rel="noopener noreferrer">IEEE Xplore</a></li>
+            <li>Russell, S., &amp; Norvig, P. (2020). <em>Artificial Intelligence: A Modern Approach (4th Edition)</em>. Pearson. (Bab 3: Informed Search &amp; Bab 4: Local Search).</li>
+            <li>Maza, I., Caballero, F., Capitan, J., Martinez-de-Dios, J. R., &amp; Ollero, A. (2011). <em>Multi-UAV Cooperation and Coordination for Search and Rescue Missions in Disaster Scenarios</em>. Autonomous Robots, 30(2), 141-155.</li>
+            <li>Sakai, A., et al. <em>PythonRobotics: A* Grid Planning Reference</em>. <a href="https://github.com/AtsushiSakai/PythonRobotics" target="_blank" rel="noopener noreferrer">github.com/AtsushiSakai/PythonRobotics</a></li>
+            <li>Repositori Resmi Proyek: <a href="https://github.com/PopSharkkk/ArtificialConceptFinalProject" target="_blank" rel="noopener noreferrer">github.com/PopSharkkk/ArtificialConceptFinalProject</a></li>
+          </ol>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <footer class="site-footer">
+    <div class="container footer-inner">
+      <span>AeroRelief : Final Project Konsep Kecerdasan Artifisial (EK234201), Departemen Teknik Informatika ITS</span>
+      <a href="https://github.com/PopSharkkk/ArtificialConceptFinalProject" target="_blank" rel="noopener noreferrer">Lihat Kode Sumber di GitHub</a>
+    </div>
+  </footer>
+
+  <!-- Video Modal Dialog -->
+  <div id="videoModal" class="modal-backdrop hidden" role="dialog" aria-modal="true" aria-labelledby="modalTitle">
+    <div class="modal-box">
+      <div class="modal-head">
+        <h2 id="modalTitle">Pratinjau Video Simulasi AeroRelief (1080p HD)</h2>
+        <button id="closeVideoModalBtn" type="button" class="btn btn-ghost" aria-label="Tutup dialog video">Tutup (Esc)</button>
+      </div>
+      <video id="modalDemoVideo" controls preload="metadata" poster="/media/video_poster.png">
+        <source src="/media/aerorelief_mockup_demo.mp4" type="video/mp4" />
+      </video>
+    </div>
+  </div>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>

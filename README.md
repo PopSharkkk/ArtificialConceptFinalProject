@@ -1,26 +1,52 @@
-# AeroRelief - Disaster Relief Drone Routing Optimization
-> **Final Project Konsep Kecerdasan Artifisial (KKA) - Departemen Teknik Informatika ITS**
+# AeroRelief : Optimasi Rute Drone Logistik Medis Pasca Bencana
 
-## 📌 Project Overview
-**AeroRelief** is an AI-powered emergency medical logistics distribution system using autonomous drone fleets in post-disaster scenarios where ground infrastructure is damaged or compromised.
+> **Final Project Konsep Kecerdasan Artifisial (EK234201) - Departemen Teknik Informatika ITS**
 
-### 🧠 Implemented AI Search Algorithms
-1. **Informed Search (A\* Pathfinding):**
-   Computes minimum-cost, obstacle-free 2D/3D flight trajectories between disaster relief camps avoiding no-fly zones and hazardous terrain.
-2. **Local / Heuristic Search (Genetic Algorithm):**
-   Solves the multi-depot, multi-drone Vehicle Routing Problem with Time Windows and Battery Limits (VRPTW-BL), optimizing delivery schedules and payload assignments.
+![Simulasi AeroRelief](media/aerorelief_simulation.gif)
+
+**AeroRelief** adalah sistem perencanaan rute dan penjadwalan armada multi-drone berbasis Python untuk distribusi logistik medis darurat pada wilayah bencana dengan akses darat terputus.
 
 ---
 
-## 📑 Proposal & Progress Presentation
-Dokumen lengkap progress dan rincian presentasi PPT dapat dibaca di:
-👉 [**PROPOSAL_PROJECT_KKA.md**](PROPOSAL_PROJECT_KKA.md)
+## Algoritma Kecerdasan Artifisial yang Diimplementasikan
+1. **Informed Search : Algoritma A\* (A-Star)** (dibandingkan dengan *Uniform Cost Search* & *Greedy Best-First Search*)
+   - Menghitung lintasan terbang optimal di atas peta topografi elevasi yang menghindari *No-Fly Zone* (awan panas, longsor, koridor SUTET) tanpa *diagonal corner-cutting*.
+2. **Local / Heuristic Search : Genetic Algorithm (VRPTW-BL)** (dibandingkan dengan *Simulated Annealing*)
+   - Mengoptimalkan penugasan posko multi-drone dengan memperhitungkan batas kapasitas muatan, jangkauan baterai (termasuk *reload* di Depot), dan penalti keterlambatan berdasarkan tingkat urgensi (*KRITIS, TINGGI, SEDANG*).
 
-### Konten Progress yang Dicakup:
-- [x] Topik / Judul Proyek
-- [x] Deskripsi Proyek (> 150 kata)
-- [x] Latar Belakang & Alasan Pemilihan Topik
-- [x] Metode & Algoritma yang Digunakan (A* + Genetic Algorithm)
-- [x] Alur Kerja / Flowchart Aplikasi (Mermaid diagram)
-- [x] Rancangan Mockup & Dashboard Simulasi
-- [x] Referensi Ilmiah (IEEE, PythonRobotics, AIMA)
+---
+
+## Cara Menjalankan Proyek
+
+### 1. Instalasi Dependensi
+```bash
+pip install -r requirements.txt
+```
+
+### 2. Jalankan Aplikasi Web Interaktif (Flask + HTML5 Canvas)
+```bash
+python server.py
+```
+Buka browser di **`http://127.0.0.1:5050`**.  
+Fitur web: 3 skenario bencana Indonesia (*Semeru, Cianjur, Demak*), editor peta interaktif (*tambah posko & lukis zona terlarang*), benchmark algoritma secara langsung, manifes penerbangan armada, mode Terang/Malam, pemutar Video Mockup HD, dan unduhan file presentasi PPTX.
+
+### 3. Jalankan Alternatif Dashboard Streamlit
+```bash
+streamlit run app_mockup.py
+```
+
+### 4. Jalankan Pengujian Otomatis (`unittest`)
+```bash
+python -m unittest discover -s tests -v
+```
+
+---
+
+## Struktur Berkas & Materi Presentasi
+- [`aerorelief/`](aerorelief/) : Paket inti Python (`models.py`, `environment.py`, `pathfinding.py`, `routing.py`, `scenarios.py`, `solver.py`)
+- [`server.py`](server.py) & [`web/`](web/) : Aplikasi web *full-stack* interaktif
+- [`app_mockup.py`](app_mockup.py) : Dashboard interaktif berbasis Streamlit
+- [`media/aerorelief_mockup_demo.mp4`](media/aerorelief_mockup_demo.mp4) : **Video Mockup Simulasi Full HD (1080p, 30 fps)**
+- [`media/flowchart_sistem.png`](media/flowchart_sistem.png) & [`media/benchmark_algorithms.png`](media/benchmark_algorithms.png) : Diagram alur & grafik benchmark
+- [`AeroRelief_Progress_KKA.pptx`](AeroRelief_Progress_KKA.pptx) : **Slide Presentasi Progress KKA (9 Slide siap kumpul)**
+- [`PROPOSAL_PROJECT_KKA.md`](PROPOSAL_PROJECT_KKA.md) : Dokumen lengkap proposal & metodologi

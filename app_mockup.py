@@ -1,118 +1,109 @@
+"""Streamlit interactive dashboard for AeroRelief (alternative Python UI)."""
+
+import os
 import streamlit as st
-import numpy as np
 import matplotlib.pyplot as plt
 import matplotlib.patches as patches
-from aero_relief_prototype import GridEnvironment, astar_search, GeneticDroneRouter
+from aerorelief.solver import solve_mission
 
-st.set_page_config(page_title="AeroRelief Simulator - KKA Final Project", layout="wide", page_icon="🚁")
+st.set_page_config(page_title="AeroRelief Simulator - KKA ITS", layout="wide")
 
-st.title("🚁 AeroRelief: Emergency Medical Drone Logistics Simulator")
-st.markdown("""
-**Tugas Final Project Konsep Kecerdasan Artifisial (KKA) - Teknik Informatika ITS**  
-*Penerapan Algoritma Pencarian: **Informed Search (A\*)** & **Local / Heuristic Search (Genetic Algorithm)***
-""")
+st.title("AeroRelief: Optimasi Rute Logistik Medis Multi-Drone Pasca Bencana")
+st.markdown(
+    "**Final Project Konsep Kecerdasan Artifisial (EK234201) - Teknik Informatika ITS** | "
+    "Two-Tier AI Search: **Informed Search (A*)** & **Local Search (Genetic Algorithm VRPTW-BL)**"
+)
 
-# Sidebar Controls
-st.sidebar.header("⚙️ Konfigurasi Parameter Simulasi")
-num_drones = st.sidebar.slider("Jumlah Armada Drone", min_value=1, max_value=4, value=2)
-pop_size = st.sidebar.slider("Ukuran Populasi (GA)", min_value=20, max_value=100, value=40, step=10)
-generations = st.sidebar.slider("Jumlah Generasi (GA)", min_value=20, max_value=150, value=60, step=10)
+st.sidebar.header("Konfigurasi Parameter Simulasi")
+scenario_map = {
+    "Erupsi Gunung Semeru (Lumajang)": "semeru",
+    "Gempa Bumi & Longsor Cianjur": "cianjur",
+    "Banjir Bandang Karanganyar (Demak)": "demak",
+}
+selected_label = st.sidebar.selectbox("Skenario Bencana", list(scenario_map.keys()))
+scenario_id = scenario_map[selected_label]
 
-# Environment Setup
-env = GridEnvironment(30, 30)
-env.add_obstacle_zone(10, 18, 10, 18)
+path_algo = st.sidebar.selectbox("Algoritma Pencarian Jalur (Tier 1)", ["astar", "ucs", "greedy"])
+routing_algo = st.sidebar.selectbox("Algoritma Penjadwalan (Tier 2)", ["ga", "sa"])
+num_drones = st.sidebar.slider("Jumlah Armada Drone", 1, 4, 3)
+pop_size = st.sidebar.slider("Ukuran Populasi (GA)", 20, 100, 50, 10)
+generations = st.sidebar.slider("Jumlah Generasi", 20, 140, 80, 10)
+max_battery = st.sidebar.slider("Batas Jarak Baterai (km)", 45, 120, 80, 5)
 
-depot = (2, 2)
-camps = [(8, 22), (25, 25), (24, 6), (5, 14), (20, 2), (12, 4), (22, 16)]
+mission = solve_mission(
+    {
+        "scenario_id": scenario_id,
+        "path_algorithm": path_algo,
+        "routing_algorithm": routing_algo,
+        "num_drones": num_drones,
+        "pop_size": pop_size,
+        "generations": generations,
+        "max_battery_km": max_battery,
+    }
+)
 
-col_map, col_stats = st.columns([3, 2])
+tab_sim, tab_video = st.tabs(["Peta & Analitik Optimasi", "Video Simulasi HD (1080p)"])
 
-# Compute Distance Matrix
-all_points = [-1] + list(range(len(camps)))
-point_coords = {-1: depot}
-for idx, c in enumerate(camps):
-    point_coords[idx] = c
+with tab_sim:
+    if not mission.get("reachable"):
+        st.error(mission.get("message", "Posko tidak dapat dijangkau."))
+    else:
+        eval_data = mission["routing"]["active"]["evaluation"]
+        c1, c2, c3 = st.columns(3)
+        c1.metric("Total Jarak Armada", f"{eval_data['total_distance_km']:.1f} km")
+        c2.metric("Makespan (Waktu Selesai)", f"{eval_data['makespan_min']:.1f} menit")
+        c3.metric("Ketepatan Waktu Urgensi", f"{eval_data['on_time_pct']:.1f}%")
 
-dist_matrix = {}
-detailed_paths = {}
+        col_map, col_info = st.columns([3, 2])
+        with col_map:
+            fig, ax = plt.subplots(figsize=(9, 6.5))
+            ax.imshow(mission["elevation"], origin="lower", cmap="YlGn", alpha=0.35)
+            for hz in mission["scenario"]["hazard_zones"]:
+                rect = patches.Rectangle(
+                    (hz["x_min"] - 0.5, hz["y_min"] - 0.5),
+                    hz["x_max"] - hz["x_min"] + 1,
+                    hz["y_max"] - hz["y_min"] + 1,
+                    linewidth=1.8,
+                    edgecolor="#B91C1C",
+                    facecolor="#FCA5A5",
+                    alpha=0.55,
+                )
+                ax.add_patch(rect)
 
-for p1 in all_points:
-    for p2 in all_points:
-        if p1 == p2:
-            dist_matrix[(p1, p2)] = 0.0
-            detailed_paths[(p1, p2)] = []
-        else:
-            path, cost = astar_search(env, point_coords[p1], point_coords[p2])
-            dist_matrix[(p1, p2)] = cost
-            detailed_paths[(p1, p2)] = path
+            depot = mission["depot"]
+            ax.plot(depot[0], depot[1], "s", color="#C84318", markersize=12, label="Base Depot")
+            for camp in mission["camps"]:
+                ax.plot(camp["x"], camp["y"], "o", color="#B4232E", markersize=8)
+                ax.text(camp["x"] + 0.4, camp["y"] + 0.4, f"P{camp['id']}", fontsize=8, fontweight="bold")
 
-# Run GA
-ga = GeneticDroneRouter(depot, camps, dist_matrix, num_drones=num_drones, pop_size=pop_size, generations=generations)
-best_chrom, best_cost = ga.run()
+            colors = ["#1D5BD6", "#B86B00", "#0F7B58", "#B4234E"]
+            for idx, ds in enumerate(eval_data["drone_schedules"]):
+                col = colors[idx % len(colors)]
+                for s_i, seg in enumerate(ds["segments"]):
+                    if len(seg["path"]) >= 2:
+                        xs = [p[0] for p in seg["path"]]
+                        ys = [p[1] for p in seg["path"]]
+                        ax.plot(xs, ys, color=col, linewidth=2.3, label=ds["callsign"] if s_i == 0 else "")
 
-with col_map:
-    st.subheader("🗺️ Visualisasi Peta Zona Bencana & Rute Optimal")
-    fig, ax = plt.subplots(figsize=(8, 8))
-    ax.set_xlim(0, 30)
-    ax.set_ylim(0, 30)
-    ax.grid(True, linestyle="--", alpha=0.5)
+            ax.set_xlim(-0.5, mission["scenario"]["grid_width"] - 0.5)
+            ax.set_ylim(-0.5, mission["scenario"]["grid_height"] - 0.5)
+            ax.legend(loc="upper right", fontsize=8)
+            ax.set_title(mission["scenario"]["title"])
+            st.pyplot(fig)
 
-    # Obstacle / No-fly zone
-    rect = patches.Rectangle((10, 10), 9, 9, linewidth=1.5, edgecolor='crimson', facecolor='salmon', alpha=0.5, label='No-Fly Zone (Hazard)')
-    ax.add_patch(rect)
+        with col_info:
+            st.subheader("Manifes Rute Armada")
+            for ds in eval_data["drone_schedules"]:
+                st.write(
+                    f"**{ds['callsign']}** ({ds['total_distance_km']} km, {ds['total_time_min']} mnt): "
+                    + " -> ".join(ds["route_labels"])
+                )
+            st.subheader("Benchmark Pencarian Jalur")
+            st.dataframe(mission["pathfinding"]["benchmark"], use_container_width=True)
 
-    # Depot
-    ax.plot(depot[0], depot[1], 'ks', markersize=12, label='Depot / Basecamp')
-    ax.text(depot[0], depot[1] - 1.5, "Depot", fontweight='bold', ha='center')
-
-    # Camps
-    colors = ['#1f77b4', '#ff7f0e', '#2ca02c', '#d62728', '#9467bd']
-    chunk = int(np.ceil(len(camps) / num_drones))
-
-    for idx, c in enumerate(camps):
-        ax.plot(c[0], c[1], 'ro', markersize=9)
-        ax.text(c[0], c[1] + 0.8, f"Posko {idx+1}", fontsize=9, ha='center', fontweight='bold')
-
-    # Draw trajectories
-    for d in range(num_drones):
-        drone_camps = best_chrom[d*chunk : (d+1)*chunk]
-        if not drone_camps:
-            continue
-        c_color = colors[d % len(colors)]
-        
-        # Sequence: Depot -> Camps -> Depot
-        route_nodes = [-1] + drone_camps + [-1]
-        for i in range(len(route_nodes) - 1):
-            p1, p2 = route_nodes[i], route_nodes[i+1]
-            sub_path = detailed_paths[(p1, p2)]
-            if sub_path:
-                xs = [p[0] for p in sub_path]
-                ys = [p[1] for p in sub_path]
-                ax.plot(xs, ys, color=c_color, linewidth=2.5, linestyle='-', label=f"Drone #{d+1} Path" if i == 0 else "")
-
-    ax.set_xlabel("Koordinat X (Grid Km)")
-    ax.set_ylabel("Koordinat Y (Grid Km)")
-    ax.legend(loc='upper right')
-    st.pyplot(fig)
-
-with col_stats:
-    st.subheader("📊 Analitik & Jadwal Pengiriman Armada")
-    st.metric("Total Jarak Tempuh Armada", f"{best_cost:.2f} km")
-    st.metric("Jumlah Titik Posko Bencana", f"{len(camps)} Posko")
-    st.metric("Jumlah Armada Drone Aktif", f"{num_drones} UAV")
-
-    st.markdown("### 📋 Alokasi Rute per Drone:")
-    for d in range(num_drones):
-        drone_camps = best_chrom[d*chunk : (d+1)*chunk]
-        if not drone_camps:
-            st.info(f"**Drone #{d+1}:** Standby di Depot")
-            continue
-        route_str = " ➔ ".join([f"**Posko {idx+1}**" for idx in drone_camps])
-        st.success(f"**Drone #{d+1}:** Depot ➔ {route_str} ➔ Depot")
-
-    st.markdown("""
-    ---
-    ### 🔬 Evaluasi Algoritma:
-    - **Informed Search (A\*):** Berhasil menavigasi drone melewati rintangan *No-Fly Zone* (merah) menggunakan lintasan dengan biaya energi minimum.
-    - **Genetic Algorithm:** Berhasil mendistribusikan beban kunjungan antar drone secara seimbang tanpa tumpang tindih urutan rute.
-    """)
+with tab_video:
+    video_path = os.path.join(os.path.dirname(__file__), "media", "aerorelief_mockup_demo.mp4")
+    if os.path.exists(video_path):
+        st.video(video_path)
+    else:
+        st.warning("File video media/aerorelief_mockup_demo.mp4 belum ditemukan.")
