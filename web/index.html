@@ -7,7 +7,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="/static/styles.css" />
+  <link rel="stylesheet" href="/static/styles.css?v=3" />
 </head>
 <body>
   <header class="topbar">
@@ -162,14 +162,50 @@
           </div>
 
           <div class="control-group">
-            <span class="field-label">Alat Editor Peta Interaktif</span>
+            <span class="field-label">Alat Editor Peta &amp; Posko</span>
             <div class="tool-selector" role="group" aria-label="Pilih mode klik pada peta">
               <button type="button" class="tool-btn active" data-tool="inspect">Inspeksi</button>
-              <button type="button" class="tool-btn" data-tool="add_camp">Tambah Posko</button>
-              <button type="button" class="tool-btn" data-tool="add_obstacle">Lukis Zona Terlarang</button>
+              <button type="button" class="tool-btn" data-tool="add_camp">Klik Peta: + Posko</button>
+              <button type="button" class="tool-btn" data-tool="remove_camp">Klik Peta: Hapus Posko</button>
+              <button type="button" class="tool-btn" data-tool="add_obstacle">Lukis Rintangan</button>
               <button type="button" class="tool-btn" data-tool="erase_obstacle">Hapus Rintangan</button>
             </div>
+
+            <!-- Form Tambah Posko Cepat -->
+            <div class="add-camp-box" id="addCampBox">
+              <span class="field-label">Tambah Posko Baru (Klik Peta atau Isi Koordinat)</span>
+              <input id="newCampName" type="text" class="text-input" placeholder="Nama Posko (opsional, misal: Posko Desa A)" />
+              <div class="camp-form-row">
+                <div>
+                  <label for="newCampUrgency" class="mini-label">Urgensi</label>
+                  <select id="newCampUrgency" class="select-input select-compact">
+                    <option value="KRITIS">KRITIS</option>
+                    <option value="TINGGI" selected>TINGGI</option>
+                    <option value="SEDANG">SEDANG</option>
+                  </select>
+                </div>
+                <div>
+                  <label for="newCampDemand" class="mini-label">Muatan (kg)</label>
+                  <input id="newCampDemand" type="number" min="0.5" max="5.0" step="0.5" value="1.8" class="text-input input-compact" />
+                </div>
+              </div>
+              <div class="camp-form-row">
+                <div>
+                  <label for="newCampX" class="mini-label">Grid X (0-35)</label>
+                  <input id="newCampX" type="number" min="0" max="35" step="1" value="15" class="text-input input-compact" />
+                </div>
+                <div>
+                  <label for="newCampY" class="mini-label">Grid Y (0-25)</label>
+                  <input id="newCampY" type="number" min="0" max="25" step="1" value="8" class="text-input input-compact" />
+                </div>
+              </div>
+              <button id="addCampSubmitBtn" type="button" class="btn btn-outline btn-full">
+                + Tambah Posko via Koordinat
+              </button>
+            </div>
+
             <div class="editor-sub-actions">
+              <button id="undoCampBtn" type="button" class="btn btn-subtle">Hapus Posko Terakhir</button>
               <button id="clearCampsBtn" type="button" class="btn btn-subtle">Kosongkan Posko</button>
             </div>
           </div>
@@ -437,6 +473,6 @@
     </div>
   </div>
 
-  <script src="/static/app.js"></script>
+  <script src="/static/app.js?v=3"></script>
 </body>
 </html>

@@ -16,6 +16,7 @@
     speed: 1.0,
     lastFrameTime: 0,
     hoverCell: null,
+    manualBannerUntil: 0,
   };
 
   const els = {
@@ -44,7 +45,14 @@
     showExploredChk: document.getElementById("showExploredChk"),
     solveBtn: document.getElementById("solveBtn"),
     resetScenarioBtn: document.getElementById("resetScenarioBtn"),
+    undoCampBtn: document.getElementById("undoCampBtn"),
     clearCampsBtn: document.getElementById("clearCampsBtn"),
+    newCampName: document.getElementById("newCampName"),
+    newCampUrgency: document.getElementById("newCampUrgency"),
+    newCampDemand: document.getElementById("newCampDemand"),
+    newCampX: document.getElementById("newCampX"),
+    newCampY: document.getElementById("newCampY"),
+    addCampSubmitBtn: document.getElementById("addCampSubmitBtn"),
     emptyReloadBtn: document.getElementById("emptyReloadBtn"),
     errorResetBtn: document.getElementById("errorResetBtn"),
     loadingBanner: document.getElementById("loadingBanner"),
@@ -315,7 +323,7 @@
     }
 
     if (data.empty) {
-      els.emptyOverlay.classList.remove("hidden");
+      els.emptyOverlay.classList.toggle("hidden", state.activeTool === "add_camp");
       els.kpiDistance.textContent = "0.0 km";
       els.kpiMakespan.textContent = "0.0 mnt";
       els.kpiReplans.textContent = "0x";
@@ -376,6 +384,9 @@
   }
 
   function updateDynamicLiveBanner(simTime) {
+    if (performance.now() < state.manualBannerUntil) {
+      return;
+    }
     const m = state.mission;
     if (!m || !m.dynamic || !m.dynamic.replan_log || m.dynamic.replan_log.length === 0) {
       els.dynamicAlertBanner.classList.add("hidden");
@@ -1017,8 +1028,89 @@
     els.emptyReloadBtn.addEventListener("click", resetAction);
     els.errorResetBtn.addEventListener("click", resetAction);
 
+    async function addNewCampAt(gx, gy) {
+      if (!state.mission) return;
+      if (!state.serverOnline) {
+        await checkBackend();
+      }
+      const gw = state.mission.scenario.grid_width;
+      const gh = state.mission.scenario.grid_height;
+      if (gx < 0 || gx >= gw || gy < 0 || gy >= gh) {
+        els.errorBanner.classList.remove("hidden");
+        els.errorMessage.textContent = `Koordinat (${gx}, ${gy}) berada di luar batas peta (0..${gw - 1}, 0..${gh - 1}).`;
+        return;
+      }
+      if (gx === state.mission.depot[0] && gy === state.mission.depot[1]) {
+        els.errorBanner.classList.remove("hidden");
+        els.errorMessage.textContent = `Titik (${gx}, ${gy}) adalah lokasi Base Depot. Pilih titik lain.`;
+        return;
+      }
+      const inStaticObs = (state.mission.obstacles || []).some((o) => o[0] === gx && o[1] === gy);
+      const dynEvents = state.mission.dynamic && state.mission.dynamic.events ? state.mission.dynamic.events : [];
+      const inDynObs = dynEvents.some((ev) =>
+        getEventCells(ev, gw, gh).some(([cx, cy]) => cx === gx && cy === gy)
+      );
+      if (inStaticObs || inDynObs) {
+        els.errorBanner.classList.remove("hidden");
+        els.errorMessage.textContent = `Titik (${gx}, ${gy}) berada di dalam Zona Bahaya / Rintangan. Klik pada area hijau/aman di luar kotak rintangan!`;
+        return;
+      }
+
+      const list = state.customCamps !== null ? [...state.customCamps] : [...(state.mission.camps || [])];
+      if (list.some((c) => c.x === gx && c.y === gy)) {
+        els.errorBanner.classList.remove("hidden");
+        els.errorMessage.textContent = `Sudah ada posko pada koordinat (${gx}, ${gy}).`;
+        return;
+      }
+
+      const nextId = list.reduce((mx, c) => Math.max(mx, c.id), 0) + 1;
+      const customName = els.newCampName && els.newCampName.value.trim()
+        ? els.newCampName.value.trim()
+        : `Posko Baru ${nextId}`;
+      const urgency = els.newCampUrgency ? els.newCampUrgency.value : "TINGGI";
+      const demand = els.newCampDemand ? Math.max(0.5, Math.min(5.0, Number(els.newCampDemand.value) || 1.8)) : 1.8;
+      const tw = urgency === "KRITIS" ? 38 : (urgency === "TINGGI" ? 50 : 65);
+
+      list.push({
+        id: nextId,
+        name: customName,
+        x: gx,
+        y: gy,
+        urgency,
+        demand_kg: demand,
+        time_window_min: tw,
+        supply_type: "Paket Medis Darurat",
+      });
+      if (els.newCampName) els.newCampName.value = "";
+      state.customCamps = list;
+      els.dynamicAlertTitle.textContent = `Posko Ditambahkan: ${customName} di Grid (${gx}, ${gy})`;
+      els.dynamicAlertText.textContent = "Menghitung ulang jalur A* dan penjadwalan armada untuk melayani posko baru...";
+      els.dynamicAlertBanner.classList.remove("hidden");
+      state.manualBannerUntil = performance.now() + 4500;
+      await runSolver();
+    }
+
+    els.addCampSubmitBtn.addEventListener("click", () => {
+      const gx = Number(els.newCampX.value);
+      const gy = Number(els.newCampY.value);
+      addNewCampAt(gx, gy);
+    });
+
+    els.undoCampBtn.addEventListener("click", () => {
+      if (!state.mission) return;
+      const list = state.customCamps !== null ? [...state.customCamps] : [...(state.mission.camps || [])];
+      if (list.length === 0) return;
+      list.pop();
+      state.customCamps = list;
+      runSolver();
+    });
+
     els.clearCampsBtn.addEventListener("click", () => {
       state.customCamps = [];
+      state.activeTool = "add_camp";
+      document.querySelectorAll(".tool-btn").forEach((b) => {
+        b.classList.toggle("active", b.getAttribute("data-tool") === "add_camp");
+      });
       runSolver();
     });
 
@@ -1027,6 +1119,15 @@
         document.querySelectorAll(".tool-btn").forEach((b) => b.classList.remove("active"));
         btn.classList.add("active");
         state.activeTool = btn.getAttribute("data-tool");
+        if (state.mission && state.mission.empty) {
+          els.emptyOverlay.classList.toggle("hidden", state.activeTool === "add_camp");
+        }
+        if (state.activeTool === "add_camp") {
+          els.dynamicAlertTitle.textContent = "Mode Tambah Posko Aktif";
+          els.dynamicAlertText.textContent = "Klik titik aman mana saja di atas peta untuk menaruh posko baru.";
+          els.dynamicAlertBanner.classList.remove("hidden");
+          state.manualBannerUntil = performance.now() + 4500;
+        }
       });
     });
 
@@ -1076,22 +1177,18 @@
         : 0;
       const simTime = Number((state.progress * makespan).toFixed(1));
 
+      if (els.newCampX) els.newCampX.value = gx;
+      if (els.newCampY) els.newCampY.value = gy;
+
       if (state.activeTool === "add_camp") {
-        if (!state.serverOnline) return;
-        const list = state.customCamps ? [...state.customCamps] : [...state.mission.camps];
-        const nextId = list.reduce((mx, c) => Math.max(mx, c.id), 0) + 1;
-        list.push({
-          id: nextId,
-          name: `Posko Tambahan ${nextId}`,
-          x: gx,
-          y: gy,
-          urgency: "TINGGI",
-          demand_kg: 1.8,
-          time_window_min: 50,
-          supply_type: "Paket Medis",
-        });
-        state.customCamps = list;
-        runSolver();
+        addNewCampAt(gx, gy);
+      } else if (state.activeTool === "remove_camp") {
+        const list = state.customCamps !== null ? [...state.customCamps] : [...(state.mission.camps || [])];
+        const filtered = list.filter((c) => !(Math.abs(c.x - gx) <= 1 && Math.abs(c.y - gy) <= 1));
+        if (filtered.length !== list.length) {
+          state.customCamps = filtered;
+          runSolver();
+        }
       } else if (state.activeTool === "add_obstacle") {
         // Mid-flight live obstacle injection when simulation is already underway
         if (simTime > 0.5 && state.mission.reachable && !state.mission.empty) {

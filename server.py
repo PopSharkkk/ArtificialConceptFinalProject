@@ -13,6 +13,13 @@ MEDIA_DIR = os.path.join(ROOT_DIR, "media")
 app = Flask(__name__, static_folder=STATIC_DIR, static_url_path="/static")
 
 
+@app.after_request
+def add_no_cache_headers(response):
+    if request.path == "/" or request.path.startswith("/static/"):
+        response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+    return response
+
+
 @app.get("/")
 def index():
     return send_from_directory(WEB_DIR, "index.html")
