@@ -37,19 +37,39 @@ Aplikasi ini dilengkapi dengan **Aplikasi Web Interaktif** (Flask + HTML5 Canvas
 
 ## 4. Metode & Algoritma yang Digunakan
 
-### A. Informed Search: Algoritma A* (A-Star)
+### A. Informed Search: Algoritma A* & Mid-Flight Re-planning
 Digunakan untuk menghitung jalur terbang terpendek dan teraman bagi drone dari titik $u$ ke $v$ dengan memperhitungkan zona terlarang serta kontur ketinggian medan:
-* **Biaya Langkah:** $\text{step\_cost}(u, v) = \text{dist}_{2D}(u, v) + \max(0, \text{elev}(v) - \text{elev}(u)) \times 0.004$
-* **Fungsi Evaluasi:** $f(n) = g(n) + h(n)$
-  * $g(n)$: Biaya akumulatif dari titik awal ke simpul $n$.
-  * $h(n)$: Heuristik jarak Euclidean 2D $\sqrt{(x_2-x_1)^2 + (y_2-y_1)^2}$. Karena penalti elevasi selalu bernilai $\ge 0$, heuristik ini bersifat *admissible* dan *consistent*, sehingga menjamin solusi optimal.
+
+* **Biaya Langkah (*Step Cost*):**
+
+$$
+c(u, v) = \text{dist}(u, v) + \max(0, \text{elev}(v) - \text{elev}(u)) \times 0.004
+$$
+
+* **Fungsi Evaluasi A\*:**
+
+$$
+f(n) = g(n) + h(n)
+$$
+
+* **Heuristik Jarak Euclidean 2D (*Admissible & Consistent*):**
+
+$$
+h(n) = \sqrt{(x_2 - x_1)^2 + (y_2 - y_1)^2}
+$$
+
+  Di mana $g(n)$ adalah biaya akumulatif dari titik awal ke simpul $n$, sedangkan $h(n)$ adalah jarak garis lurus ke tujuan. Karena penalti tanjakan elevasi selalu bernilai $\ge 0$, nilai $h(n)$ tidak pernah melebihi biaya sebenarnya sehingga menjamin rute 100% optimal. Saat muncul rintangan baru di tengah penerbangan, drone menjalankan *Dynamic A\* Re-planning* langsung dari koordinat udara saat itu.
 
 ### B. Local / Heuristic Search: Genetic Algorithm (GA)
 Digunakan untuk menyelesaikan penugasan posko dan urutan rute multi-drone (*VRPTW-BL*):
 * **Representasi Kromosom:** Permutasi urutan ID posko penerima bantuan beserta gen pemisah armada (`-100, -101, ...`).
 * **Fungsi Objektif (Minimasi):**
-  $$\text{Objective} = \text{TotalCost} + 0.35 \cdot \text{Makespan} + 2.5 \cdot \sum (\text{UrgencyWeight} \cdot \text{LateMin}) + \text{Penalty}$$
-* **Operator Genetik:** *Elitism (2 individu)*, *Tournament Selection ($k=3$)*, *Order Crossover (OX)*, serta *Swap & 2-Opt Inversion Mutation*.
+
+$$
+\text{Objective} = \text{TotalCost} + 0.35 \cdot \text{Makespan} + 2.5 \cdot \sum (\text{UrgencyWeight} \cdot \text{LateMin}) + \text{Penalty}
+$$
+
+* **Operator Genetik:** *Elitism (2 individu)*, *Tournament Selection ($k = 3$)*, *Order Crossover (OX)*, serta *Swap & 2-Opt Inversion Mutation*.
 
 ---
 
