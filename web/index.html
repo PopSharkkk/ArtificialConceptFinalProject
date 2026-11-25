@@ -7,7 +7,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="/static/styles.css?v=3" />
+  <link rel="stylesheet" href="/static/styles.css?v=4" />
 </head>
 <body>
   <header class="topbar">
@@ -104,18 +104,24 @@
           <!-- Dynamic Obstacle Control Box -->
           <div class="dynamic-control-box">
             <span class="field-label">Rintangan Berubah &amp; Adaptasi Real-Time</span>
-            <label class="checkbox-row">
-              <input id="enableDynamicChk" type="checkbox" checked />
-              <span>Aktifkan Bencana Susulan &amp; Cuaca Bergerak</span>
-            </label>
+            <label for="dynamicIntensitySelect" class="mini-label">Intensitas Rintangan Dinamis</label>
+            <select id="dynamicIntensitySelect" class="select-input select-compact">
+              <option value="high" selected>Tinggi (8 Rintangan Bergerak &amp; Susulan)</option>
+              <option value="medium">Sedang (4 Rintangan Utama)</option>
+              <option value="off">Matikan (Hanya Zona Statis)</option>
+            </select>
+            <input id="enableDynamicChk" type="checkbox" checked class="hidden" aria-hidden="true" />
             <button id="spawnSurpriseBtn" type="button" class="btn btn-outline btn-full">
-              Munculkan Rintangan Mendadak di Depan Drone
+              + Rintangan Mendadak di Depan Drone
+            </button>
+            <button id="spawnWaveBtn" type="button" class="btn btn-outline btn-full">
+              + Gelombang Badai (3 Rintangan Acak)
             </button>
             <button id="undoDynamicBtn" type="button" class="btn btn-subtle btn-full hidden">
               Batalkan Rintangan Mendadak Terakhir
             </button>
             <p class="helper-caption">
-              Gunakan alat "Lukis Zona Terlarang" saat waktu simulasi berjalan (&gt; 0.5 mnt) untuk meletakkan obstacle baru tepat di jalur terbang tanpa mengulang dari awal.
+              Gunakan alat "Lukis Rintangan" saat waktu simulasi berjalan (&gt; 0.5 mnt) untuk meletakkan obstacle baru tepat di jalur terbang tanpa mengulang dari awal.
             </p>
           </div>
 
@@ -473,6 +479,6 @@
     </div>
   </div>
 
-  <script src="/static/app.js?v=3"></script>
+  <script src="/static/app.js?v=4"></script>
 </body>
 </html>

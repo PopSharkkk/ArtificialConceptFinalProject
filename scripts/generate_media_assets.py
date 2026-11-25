@@ -599,7 +599,8 @@ def generate_video_and_gif(
                         pts = [to_px(p[0], p[1]) for p in seg["path"]]
                         draw.line(pts, fill=col, width=4 if not seg["is_reload_trip"] else 2)
         elif chapter == 4:
-            cur_scheds = static_schedules if sim_t < 6.0 else schedules
+            first_trig = min((e["trigger_min"] for e in dyn_events), default=3.5)
+            cur_scheds = static_schedules if sim_t < first_trig else schedules
             for d_idx, ds in enumerate(cur_scheds):
                 col = PALETTE["uav_colors"][d_idx % len(PALETTE["uav_colors"])]
                 for seg in ds["segments"]:

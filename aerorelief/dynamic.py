@@ -137,7 +137,7 @@ def split_drone_state_at_time(
         elif s_start < t_ev < s_end and len(raw_path) >= 2:
             span = max(s_end - s_start, 1e-6)
             frac = (t_ev - s_start) / span
-            split_i = min(len(raw_path) - 1, max(0, int(round(frac * (len(raw_path) - 1)))))
+            split_i = min(len(raw_path) - 1, max(0, int(math.floor(frac * (len(raw_path) - 1)))))
             curr_pos = raw_path[split_i]
             past_path = raw_path[: split_i + 1]
             fut_path = raw_path[split_i:]

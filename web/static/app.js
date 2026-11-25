@@ -29,8 +29,10 @@
     kpiReplans: document.getElementById("kpiReplans"),
     pathAlgoSelect: document.getElementById("pathAlgoSelect"),
     routingAlgoSelect: document.getElementById("routingAlgoSelect"),
+    dynamicIntensitySelect: document.getElementById("dynamicIntensitySelect"),
     enableDynamicChk: document.getElementById("enableDynamicChk"),
     spawnSurpriseBtn: document.getElementById("spawnSurpriseBtn"),
+    spawnWaveBtn: document.getElementById("spawnWaveBtn"),
     undoDynamicBtn: document.getElementById("undoDynamicBtn"),
     numDronesRange: document.getElementById("numDronesRange"),
     popSizeRange: document.getElementById("popSizeRange"),
@@ -272,11 +274,13 @@
     els.loadingBanner.classList.remove("hidden");
     els.errorBanner.classList.add("hidden");
 
+    const intensity = els.dynamicIntensitySelect ? els.dynamicIntensitySelect.value : "high";
     const payload = overridePayload || {
       scenario_id: state.scenarioId,
       path_algorithm: els.pathAlgoSelect.value,
       routing_algorithm: els.routingAlgoSelect.value,
-      enable_dynamic_events: els.enableDynamicChk.checked,
+      enable_dynamic_events: intensity !== "off",
+      dynamic_intensity: intensity,
       num_drones: Number(els.numDronesRange.value),
       pop_size: Number(els.popSizeRange.value),
       generations: Number(els.generationsRange.value),
@@ -1005,8 +1009,79 @@
       runSolver();
     });
 
+    if (els.dynamicIntensitySelect) {
+      els.dynamicIntensitySelect.addEventListener("change", () => runSolver());
+    }
     els.enableDynamicChk.addEventListener("change", () => runSolver());
     els.spawnSurpriseBtn.addEventListener("click", spawnSurpriseObstacleAhead);
+    if (els.spawnWaveBtn) {
+      els.spawnWaveBtn.addEventListener("click", () => {
+        const m = state.mission;
+        if (!m || !m.reachable || m.empty) return;
+        const evalData = m.routing.active.evaluation;
+        const makespan = Math.max(evalData.makespan_min, 1.0);
+        let targetMin = state.progress * makespan;
+        if (targetMin < 1.5 || targetMin > makespan * 0.80) {
+          targetMin = Number(Math.min(9.0, makespan * 0.2).toFixed(1));
+        } else {
+          targetMin = Number(targetMin.toFixed(1));
+        }
+        const protectedKeys = new Set([`${m.depot[0]},${m.depot[1]}`]);
+        for (const c of m.camps) protectedKeys.add(`${c.x},${c.y}`);
+        const gw = m.scenario.grid_width;
+        const gh = m.scenario.grid_height;
+
+        // Collect up to 3 obstacle centers ahead of active drones or random open corridors
+        const centers = [];
+        for (const ds of evalData.drone_schedules) {
+          for (const seg of ds.segments) {
+            if (seg.end_min > targetMin + 1.0 && seg.path && seg.path.length >= 6) {
+              const span = Math.max(seg.end_min - seg.start_min, 1e-6);
+              const curIdx = seg.start_min <= targetMin
+                ? Math.floor(((targetMin - seg.start_min) / span) * (seg.path.length - 1))
+                : 0;
+              const curPt = seg.path[curIdx];
+              protectedKeys.add(`${curPt[0]},${curPt[1]}`);
+              const aheadPt = seg.path[Math.min(seg.path.length - 2, curIdx + 4)];
+              centers.push(aheadPt);
+              break;
+            }
+          }
+          if (centers.length >= 3) break;
+        }
+        while (centers.length < 3) {
+          centers.push([
+            4 + Math.floor(Math.random() * (gw - 8)),
+            3 + Math.floor(Math.random() * (gh - 6)),
+          ]);
+        }
+
+        centers.slice(0, 3).forEach((center, idx) => {
+          const cells = [];
+          for (let dx = -1; dx <= 1; dx++) {
+            for (let dy = -1; dy <= 1; dy++) {
+              const cx = center[0] + dx;
+              const cy = center[1] + dy;
+              if (cx >= 0 && cx < gw && cy >= 0 && cy < gh && !protectedKeys.has(`${cx},${cy}`)) {
+                cells.push([cx, cy]);
+              }
+            }
+          }
+          if (cells.length > 0) {
+            state.injectedEvents.push({
+              id: `wave_${Date.now()}_${idx}`,
+              name: `Sel Badai Acak #${state.injectedEvents.length + 1}`,
+              trigger_min: Number((targetMin + idx * 3.5).toFixed(1)),
+              expire_min: Number((targetMin + idx * 3.5 + 18.0).toFixed(1)),
+              cells,
+              hazard_type: "Gelombang Badai",
+            });
+          }
+        });
+        syncSliderLabels();
+        runSolver(null, targetMin);
+      });
+    }
     els.undoDynamicBtn.addEventListener("click", () => {
       if (state.injectedEvents.length === 0) return;
       const removed = state.injectedEvents.pop();

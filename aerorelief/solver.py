@@ -161,6 +161,9 @@ def solve_mission(payload: Dict[str, Any] | None = None) -> Dict[str, Any]:
     generations = int(req.get("generations", 80))
     seed = int(req.get("seed", 42))
     enable_dynamic = bool(req.get("enable_dynamic_events", True))
+    dynamic_intensity = str(req.get("dynamic_intensity", "high")).lower()
+    if dynamic_intensity == "off":
+        enable_dynamic = False
     injected_events = _parse_injected_events(req.get("injected_events") or [])
 
     matrices = compute_distance_matrices(env, depot_coord, camps, algorithm=path_algorithm)
@@ -215,7 +218,10 @@ def solve_mission(payload: Dict[str, Any] | None = None) -> Dict[str, Any]:
 
     all_dyn_events: List[DynamicHazardEvent] = []
     if enable_dynamic:
-        all_dyn_events.extend(scenario.dynamic_events)
+        if dynamic_intensity == "medium":
+            all_dyn_events.extend(scenario.dynamic_events[:4])
+        else:
+            all_dyn_events.extend(scenario.dynamic_events)
     all_dyn_events.extend(injected_events)
 
     replan_log: List[Dict[str, Any]] = []
