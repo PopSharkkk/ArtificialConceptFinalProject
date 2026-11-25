@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>AeroRelief : Optimasi Rute Drone Logistik Medis (KKA ITS)</title>
+  <title>AeroRelief : Optimasi Rute Dinamis Drone Logistik Medis (KKA ITS)</title>
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
@@ -21,8 +21,8 @@
       </div>
 
       <nav class="nav-links" aria-label="Navigasi utama">
-        <a href="#simulasi">Simulasi Peta</a>
-        <a href="#analitik">Analitik Algoritma</a>
+        <a href="#simulasi">Simulasi Dinamis</a>
+        <a href="#analitik">Log Adaptasi &amp; Analitik</a>
         <a href="#video-demo">Video &amp; Materi</a>
         <a href="#metodologi">Metodologi</a>
       </nav>
@@ -44,9 +44,9 @@
     <section class="briefing-strip">
       <div class="container briefing-grid">
         <div class="briefing-copy">
-          <h1>Optimasi Rute Pengiriman Logistik Medis Multi-Drone Pasca Bencana</h1>
+          <h1>Optimasi Rute Adaptif Logistik Medis Multi-Drone pada Medan Bencana Dinamis</h1>
           <p id="scenarioDesc">
-            Sistem perencanaan rute dua tingkat berbasis Python: algoritma Informed Search (A*) mencari lintasan aman bebas zona bahaya di atas medan topografi, sementara Genetic Algorithm menyelesaikan penjadwalan armada multi-drone (VRPTW-BL).
+            Sistem perencanaan rute dua tingkat berbasis Python dengan kemampuan adaptasi real-time: algoritma Informed Search (A*) dan Genetic Algorithm menyusun jadwal armada, lalu melakukan mid-flight re-planning otomatis ketika rintangan baru atau awan badai bergerak menutup jalur terbang.
           </p>
         </div>
         <div class="scenario-bar">
@@ -66,8 +66,8 @@
               <strong class="kpi-value mono" id="kpiMakespan">0.0 mnt</strong>
             </div>
             <div class="kpi-cell">
-              <span class="kpi-label">Ketepatan Waktu</span>
-              <strong class="kpi-value mono" id="kpiOnTime">0%</strong>
+              <span class="kpi-label">Manuver Re-plan</span>
+              <strong class="kpi-value mono" id="kpiReplans">0x</strong>
             </div>
           </div>
         </div>
@@ -78,14 +78,14 @@
     <section id="simulasi" class="section-block">
       <div class="container console-layout">
         <!-- Left Control Panel -->
-        <aside class="control-panel" aria-label="Pengaturan parameter algoritma dan editor peta">
+        <aside class="control-panel" aria-label="Pengaturan parameter algoritma dan rintangan dinamis">
           <div class="panel-header">
             <h2>Konfigurasi AI Search</h2>
             <button id="resetScenarioBtn" type="button" class="btn-link">Reset Peta</button>
           </div>
 
           <div class="control-group">
-            <label for="pathAlgoSelect" class="field-label">Algoritma Pencarian Jalur (Tier 1)</label>
+            <label for="pathAlgoSelect" class="field-label">Algoritma Pencarian Jalur (Tier 1 &amp; Re-plan)</label>
             <select id="pathAlgoSelect" class="select-input">
               <option value="astar">A* Search (Informed, Admissible)</option>
               <option value="ucs">Uniform Cost Search (Uninformed)</option>
@@ -99,6 +99,24 @@
               <option value="ga">Genetic Algorithm (VRPTW-BL)</option>
               <option value="sa">Simulated Annealing (Pembanding)</option>
             </select>
+          </div>
+
+          <!-- Dynamic Obstacle Control Box -->
+          <div class="dynamic-control-box">
+            <span class="field-label">Rintangan Berubah &amp; Adaptasi Real-Time</span>
+            <label class="checkbox-row">
+              <input id="enableDynamicChk" type="checkbox" checked />
+              <span>Aktifkan Bencana Susulan &amp; Cuaca Bergerak</span>
+            </label>
+            <button id="spawnSurpriseBtn" type="button" class="btn btn-outline btn-full">
+              Munculkan Rintangan Mendadak di Depan Drone
+            </button>
+            <button id="undoDynamicBtn" type="button" class="btn btn-subtle btn-full hidden">
+              Batalkan Rintangan Mendadak Terakhir
+            </button>
+            <p class="helper-caption">
+              Gunakan alat "Lukis Zona Terlarang" saat waktu simulasi berjalan (&gt; 0.5 mnt) untuk meletakkan obstacle baru tepat di jalur terbang tanpa mengulang dari awal.
+            </p>
           </div>
 
           <div class="slider-grid">
@@ -168,10 +186,17 @@
 
         <!-- Right Map Stage -->
         <div class="map-stage">
-          <!-- Loading / Error / Empty banners -->
+          <!-- Loading / Dynamic Replan / Error banners -->
           <div id="loadingBanner" class="state-banner state-loading hidden" role="status" aria-live="polite">
             <span class="spinner" aria-hidden="true"></span>
-            <span>Menjalankan perhitungan jalur Python A* dan optimasi armada...</span>
+            <span>Menjalankan perhitungan jalur Python A* dan adaptasi rute armada...</span>
+          </div>
+
+          <div id="dynamicAlertBanner" class="state-banner state-dynamic hidden" role="status" aria-live="polite">
+            <div>
+              <strong id="dynamicAlertTitle">Adaptasi Rintangan Dinamis Aktif</strong>
+              <p id="dynamicAlertText">Drone menyesuaikan lintasan terbang menghindari rintangan baru.</p>
+            </div>
           </div>
 
           <div id="errorBanner" class="state-banner state-error hidden" role="alert">
@@ -183,7 +208,7 @@
           </div>
 
           <div class="canvas-wrapper">
-            <canvas id="mapCanvas" width="960" height="680" aria-label="Peta topografi interaktif rute drone"></canvas>
+            <canvas id="mapCanvas" width="960" height="680" aria-label="Peta topografi interaktif rute drone dan rintangan dinamis"></canvas>
 
             <!-- Empty State Overlay -->
             <div id="emptyOverlay" class="empty-overlay hidden">
@@ -205,7 +230,7 @@
               <button id="replayBtn" type="button" class="btn btn-ghost">Ulangi</button>
             </div>
             <div class="scrubber-wrap">
-              <input id="timeScrubber" type="range" min="0" max="100" step="0.5" value="0" aria-label="Garis waktu simulasi penerbangan" />
+              <input id="timeScrubber" type="range" min="0" max="100" step="0.25" value="0" aria-label="Garis waktu simulasi penerbangan" />
               <span id="clockReadout" class="mono clock-readout">00.0 / 00.0 mnt</span>
             </div>
             <div class="speed-group" role="group" aria-label="Kecepatan simulasi">
@@ -220,21 +245,32 @@
           <div class="legend-strip" id="legendStrip">
             <span class="legend-item"><i class="swatch swatch-depot"></i> Base Depot</span>
             <span class="legend-item"><i class="swatch swatch-crit"></i> Posko Kritis</span>
-            <span class="legend-item"><i class="swatch swatch-high"></i> Posko Tinggi</span>
             <span class="legend-item"><i class="swatch swatch-ok"></i> Logistik Terkirim</span>
-            <span class="legend-item"><i class="swatch swatch-hazard"></i> Zona Terlarang</span>
-            <span class="legend-item"><i class="swatch swatch-explored"></i> Simpul Search</span>
+            <span class="legend-item"><i class="swatch swatch-hazard"></i> Zona Bahaya Tetap</span>
+            <span class="legend-item"><i class="swatch swatch-dyn"></i> Rintangan Dinamis / Bergerak</span>
+            <span class="legend-item"><i class="swatch swatch-superseded"></i> Jalur Lama (Dibatalkan)</span>
           </div>
         </div>
       </div>
     </section>
 
-    <!-- Section 2: Analytics & Fleet Manifest -->
+    <!-- Section 2: Dynamic Adaptation Log, Analytics & Fleet Manifest -->
     <section id="analitik" class="section-block section-alt">
       <div class="container">
         <div class="section-head">
-          <h2>Bukti Kinerja Algoritma &amp; Manifes Armada</h2>
-          <p>Seluruh metrik di bawah ini dihitung langsung oleh mesin pencarian Python pada skenario aktif.</p>
+          <h2>Log Adaptasi Rintangan Dinamis, Bukti Kinerja &amp; Manifes Armada</h2>
+          <p>Setiap perubahan rintangan di tengah penerbangan memicu evaluasi ulang lintasan A* dari koordinat udara terkini tanpa mengulang misi dari Depot.</p>
+        </div>
+
+        <!-- Dynamic Re-planning Log Card -->
+        <div class="manifest-card replan-card" id="replanLogCard">
+          <div class="manifest-head">
+            <div>
+              <h3>Log Kejadian Rintangan Baru &amp; Mid-Flight A* Re-Planning</h3>
+              <p>Klik "Tonton Manuver" untuk memutar momen tepat sebelum rintangan muncul dan melihat perubahan arah terbang drone.</p>
+            </div>
+          </div>
+          <div id="replanLogBody" class="replan-log-list"></div>
         </div>
 
         <div class="charts-grid">
@@ -254,7 +290,7 @@
         <div class="manifest-card">
           <div class="manifest-head">
             <div>
-              <h3>Jadwal &amp; Manifes Penerbangan Armada</h3>
+              <h3>Jadwal &amp; Manifes Penerbangan Armada (Pasca Adaptasi)</h3>
               <p>Klik baris armada untuk menyorot jalur terbang UAV tersebut pada peta di atas.</p>
             </div>
             <button id="clearFocusDroneBtn" type="button" class="btn btn-ghost hidden">Tampilkan Semua UAV</button>
@@ -264,7 +300,7 @@
               <thead>
                 <tr>
                   <th>Armada UAV</th>
-                  <th>Urutan Pengiriman (Depot &amp; Posko)</th>
+                  <th>Urutan Pengiriman &amp; Titik Re-plan</th>
                   <th>Muatan</th>
                   <th>Jarak &amp; Reload</th>
                   <th>Waktu Selesai</th>
@@ -282,8 +318,8 @@
     <section id="video-demo" class="section-block">
       <div class="container video-section-grid">
         <div class="video-player-card">
-          <h2>Video Mockup Simulasi (1080p HD)</h2>
-          <p>Video demonstrasi alur kerja lengkap: inisialisasi peta Gunung Semeru, animasi ekspansi simpul A*, konvergensi Genetic Algorithm, hingga misi pengiriman multi-drone.</p>
+          <h2>Video Mockup Simulasi &amp; Adaptasi Dinamis (1080p HD)</h2>
+          <p>Video demonstrasi lengkap: inisialisasi peta Gunung Semeru, eksplorasi simpul A*, optimasi Genetic Algorithm, hingga kemunculan rintangan dinamis dan manuver re-planning di tengah misi.</p>
           <video id="mainDemoVideo" controls preload="metadata" poster="/media/video_poster.png">
             <source src="/media/aerorelief_mockup_demo.mp4" type="video/mp4" />
             Browser Anda tidak mendukung pemutar video HTML5.
@@ -297,21 +333,21 @@
             <li>
               <div>
                 <strong>Deck Presentasi Progress KKA (.pptx)</strong>
-                <span>9 slide lengkap: judul, deskripsi, latar belakang, rumus A* &amp; GA, flowchart, mockup, dan referensi.</span>
+                <span>9 slide lengkap mencakup fitur Dynamic Obstacle Re-planning, rumus A* &amp; GA, flowchart, mockup, dan referensi.</span>
               </div>
               <a href="/media/AeroRelief_Progress_KKA.pptx" download="AeroRelief_Progress_KKA.pptx" class="btn btn-primary">Unduh PPTX</a>
             </li>
             <li>
               <div>
                 <strong>Video Mockup Simulasi (.mp4)</strong>
-                <span>Resolusi Full HD 1920x1080 (30 fps), berdurasi 22 detik.</span>
+                <span>Resolusi Full HD 1920x1080 (30 fps) dengan adegan rintangan dinamis.</span>
               </div>
               <a href="/media/aerorelief_mockup_demo.mp4" download="aerorelief_mockup_demo.mp4" class="btn btn-outline">Unduh MP4</a>
             </li>
             <li>
               <div>
                 <strong>Screenshot Mockup Resolusi Tinggi (.png)</strong>
-                <span>Tangkapan antarmuka Mission Control untuk disematkan pada slide atau laporan.</span>
+                <span>Tangkapan antarmuka Mission Control saat adaptasi rute aktif.</span>
               </div>
               <a href="/media/mockup_simulation.png" download="mockup_simulation.png" class="btn btn-outline">Unduh PNG</a>
             </li>
@@ -324,45 +360,56 @@
     <section id="metodologi" class="section-block section-alt">
       <div class="container">
         <div class="section-head">
-          <h2>Formulasi Matematis, Flowchart &amp; Referensi</h2>
-          <p>Landasan teoretis implementasi dua tingkat pada mata kuliah Konsep Kecerdasan Artifisial (EK234201).</p>
+          <h2>Formulasi Matematis, Adaptasi Dinamis &amp; Referensi</h2>
+          <p>Landasan teoretis implementasi perencanaan jalur adaptif pada mata kuliah Konsep Kecerdasan Artifisial (EK234201).</p>
         </div>
 
-        <div class="method-grid">
+        <div class="method-grid method-grid-three">
           <article class="method-card">
-            <h3>Tier 1: Informed Search (Algoritma A*)</h3>
+            <h3>1. Informed Search (Algoritma A*)</h3>
             <p>Menghitung lintasan aman terpendek antara dua koordinat di atas peta topografi berhalangan.</p>
             <div class="formula-box mono">
               f(n) = g(n) + h(n)<br />
               h(n) = sqrt((x2 - x1)^2 + (y2 - y1)^2)<br />
               step_cost = dist_2D + max(0, delta_elevasi) * 0.004
             </div>
-            <p class="method-note">Heuristik jarak Euclidean bersifat admissible (tidak pernah melebihi biaya sebenarnya), menjamin rute yang ditemukan optimal seperti Uniform Cost Search namun dengan simpul eksplorasi jauh lebih sedikit.</p>
+            <p class="method-note">Heuristik jarak Euclidean bersifat admissible sehingga menjamin jalur 100% optimal dengan ekspansi simpul jauh lebih hemat dibanding UCS.</p>
           </article>
 
           <article class="method-card">
-            <h3>Tier 2: Local Search (Genetic Algorithm VRPTW-BL)</h3>
+            <h3>2. Local Search (Genetic Algorithm)</h3>
             <p>Mengoptimalkan pembagian posko, urutan kunjungan, isi ulang baterai di depot, serta batas waktu urgensi.</p>
             <div class="formula-box mono">
               Obj = TotalCost + 0.35 * Makespan + 2.5 * Sum(UrgencyWeight * LateMin)<br />
-              Operator: Tournament (k=3) + Order Crossover (OX) + Swap / 2-Opt Mutation
+              Operator: Tournament + OX + Swap / 2-Opt
             </div>
-            <p class="method-note">Urgensi Posko KRITIS memiliki bobot penalti keterlambatan 4x lebih besar dibanding SEDANG sehingga drone otomatis memprioritaskan pasien gawat darurat.</p>
+            <p class="method-note">Menyeimbangkan beban antar-armada dan memprioritaskan posko berstatus KRITIS.</p>
+          </article>
+
+          <article class="method-card">
+            <h3>3. Event-Driven Mid-Flight Re-Planning</h3>
+            <p>Menangani rintangan baru (longsor susulan, tiang roboh) maupun rintangan bergerak (awan abu, sel badai) saat drone sedang mengudara.</p>
+            <div class="formula-box mono">
+              Collision(Path_t..end, Obs(t)) == True<br />
+              -&gt; SplitState(pos_t, rem_batt, pending_camps)<br />
+              -&gt; Dynamic A* Re-plan dari pos_t
+            </div>
+            <p class="method-note">Drone meneruskan perjalanan dari koordinat udara saat itu tanpa harus kembali ke awal, serta otomatis menjadwalkan reload di Depot bila jalur memutar membutuhkan tambahan daya baterai.</p>
           </article>
         </div>
 
         <div class="flowchart-showcase">
-          <h3>Diagram Alur Kerja Sistem (Two-Tier Pipeline)</h3>
-          <img src="/media/flowchart_sistem.png" alt="Diagram arsitektur dan alur kerja sistem AeroRelief A* dan Genetic Algorithm" />
+          <h3>Diagram Alur Kerja Sistem &amp; Umpan Balik Rintangan Dinamis</h3>
+          <img src="/media/flowchart_sistem.png" alt="Diagram arsitektur dan alur kerja sistem AeroRelief dengan umpan balik rintangan dinamis" />
         </div>
 
         <div class="references-card">
           <h3>Daftar Referensi Ilmiah &amp; Kode Sumber</h3>
           <ol>
             <li>Dorling, K., Heinrichs, J., Messier, G. G., &amp; Magierowski, S. (2017). <em>Vehicle Routing Problems for Drone Delivery</em>. IEEE Transactions on Systems, Man, and Cybernetics: Systems, 47(1), 70-85. <a href="https://ieeexplore.ieee.org/document/7513397" target="_blank" rel="noopener noreferrer">IEEE Xplore</a></li>
+            <li>Koenig, S., &amp; Likhachev, M. (2005). <em>Fast Replanning for Navigation in Unknown Terrain</em>. IEEE Transactions on Robotics, 21(3), 354-363.</li>
             <li>Russell, S., &amp; Norvig, P. (2020). <em>Artificial Intelligence: A Modern Approach (4th Edition)</em>. Pearson. (Bab 3: Informed Search &amp; Bab 4: Local Search).</li>
             <li>Maza, I., Caballero, F., Capitan, J., Martinez-de-Dios, J. R., &amp; Ollero, A. (2011). <em>Multi-UAV Cooperation and Coordination for Search and Rescue Missions in Disaster Scenarios</em>. Autonomous Robots, 30(2), 141-155.</li>
-            <li>Sakai, A., et al. <em>PythonRobotics: A* Grid Planning Reference</em>. <a href="https://github.com/AtsushiSakai/PythonRobotics" target="_blank" rel="noopener noreferrer">github.com/AtsushiSakai/PythonRobotics</a></li>
             <li>Repositori Resmi Proyek: <a href="https://github.com/PopSharkkk/ArtificialConceptFinalProject" target="_blank" rel="noopener noreferrer">github.com/PopSharkkk/ArtificialConceptFinalProject</a></li>
           </ol>
         </div>

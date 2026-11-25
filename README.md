@@ -9,8 +9,9 @@
 ---
 
 ## Algoritma Kecerdasan Artifisial yang Diimplementasikan
-1. **Informed Search : Algoritma A\* (A-Star)** (dibandingkan dengan *Uniform Cost Search* & *Greedy Best-First Search*)
-   - Menghitung lintasan terbang optimal di atas peta topografi elevasi yang menghindari *No-Fly Zone* (awan panas, longsor, koridor SUTET) tanpa *diagonal corner-cutting*.
+1. **Informed Search : Algoritma A\* & Event-Driven Mid-Flight Re-Planning** (dibandingkan dengan *Uniform Cost Search* & *Greedy Best-First Search*)
+   - Menghitung lintasan terbang optimal di atas peta topografi elevasi yang menghindari *No-Fly Zone* tanpa *diagonal corner-cutting*.
+   - **Adaptasi Rintangan Dinamis / Bergerak:** Mendeteksi rintangan baru (longsor susulan, guguran lava, input rintangan mendadak oleh pengguna) maupun awan badai yang bergeser mengikuti waktu. Drone yang jalurnya terhalang otomatis menghitung ulang jalur memutar `A*` langsung dari koordinat udaranya saat itu tanpa mengulang dari Depot.
 2. **Local / Heuristic Search : Genetic Algorithm (VRPTW-BL)** (dibandingkan dengan *Simulated Annealing*)
    - Mengoptimalkan penugasan posko multi-drone dengan memperhitungkan batas kapasitas muatan, jangkauan baterai (termasuk *reload* di Depot), dan penalti keterlambatan berdasarkan tingkat urgensi (*KRITIS, TINGGI, SEDANG*).
 

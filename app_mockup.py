@@ -1,4 +1,4 @@
-"""Streamlit interactive dashboard for AeroRelief (alternative Python UI)."""
+"""Streamlit interactive dashboard for AeroRelief with Dynamic Obstacle Re-planning."""
 
 import os
 import streamlit as st
@@ -8,10 +8,10 @@ from aerorelief.solver import solve_mission
 
 st.set_page_config(page_title="AeroRelief Simulator - KKA ITS", layout="wide")
 
-st.title("AeroRelief: Optimasi Rute Logistik Medis Multi-Drone Pasca Bencana")
+st.title("AeroRelief: Optimasi Rute Dinamis Logistik Medis Multi-Drone")
 st.markdown(
     "**Final Project Konsep Kecerdasan Artifisial (EK234201) - Teknik Informatika ITS** | "
-    "Two-Tier AI Search: **Informed Search (A*)** & **Local Search (Genetic Algorithm VRPTW-BL)**"
+    "Two-Tier AI Search + **Mid-Flight Dynamic A* Re-planning**"
 )
 
 st.sidebar.header("Konfigurasi Parameter Simulasi")
@@ -23,7 +23,8 @@ scenario_map = {
 selected_label = st.sidebar.selectbox("Skenario Bencana", list(scenario_map.keys()))
 scenario_id = scenario_map[selected_label]
 
-path_algo = st.sidebar.selectbox("Algoritma Pencarian Jalur (Tier 1)", ["astar", "ucs", "greedy"])
+enable_dynamic = st.sidebar.checkbox("Aktifkan Rintangan Dinamis & Cuaca Bergerak", value=True)
+path_algo = st.sidebar.selectbox("Algoritma Pencarian Jalur (Tier 1 & Re-plan)", ["astar", "ucs", "greedy"])
 routing_algo = st.sidebar.selectbox("Algoritma Penjadwalan (Tier 2)", ["ga", "sa"])
 num_drones = st.sidebar.slider("Jumlah Armada Drone", 1, 4, 3)
 pop_size = st.sidebar.slider("Ukuran Populasi (GA)", 20, 100, 50, 10)
@@ -33,6 +34,7 @@ max_battery = st.sidebar.slider("Batas Jarak Baterai (km)", 45, 120, 80, 5)
 mission = solve_mission(
     {
         "scenario_id": scenario_id,
+        "enable_dynamic_events": enable_dynamic,
         "path_algorithm": path_algo,
         "routing_algorithm": routing_algo,
         "num_drones": num_drones,
@@ -42,17 +44,19 @@ mission = solve_mission(
     }
 )
 
-tab_sim, tab_video = st.tabs(["Peta & Analitik Optimasi", "Video Simulasi HD (1080p)"])
+tab_sim, tab_video = st.tabs(["Peta Adaptif & Log Re-planning", "Video Simulasi HD (1080p)"])
 
 with tab_sim:
     if not mission.get("reachable"):
         st.error(mission.get("message", "Posko tidak dapat dijangkau."))
     else:
         eval_data = mission["routing"]["active"]["evaluation"]
-        c1, c2, c3 = st.columns(3)
+        replan_log = mission.get("dynamic", {}).get("replan_log", [])
+        c1, c2, c3, c4 = st.columns(4)
         c1.metric("Total Jarak Armada", f"{eval_data['total_distance_km']:.1f} km")
         c2.metric("Makespan (Waktu Selesai)", f"{eval_data['makespan_min']:.1f} menit")
         c3.metric("Ketepatan Waktu Urgensi", f"{eval_data['on_time_pct']:.1f}%")
+        c4.metric("Manuver Mid-Flight Re-plan", f"{len(replan_log)} kejadian")
 
         col_map, col_info = st.columns([3, 2])
         with col_map:
@@ -70,6 +74,25 @@ with tab_sim:
                 )
                 ax.add_patch(rect)
 
+            for ev in mission.get("dynamic", {}).get("events", []):
+                rect_d = patches.Rectangle(
+                    (ev["x_min"] - 0.5, ev["y_min"] - 0.5),
+                    ev["x_max"] - ev["x_min"] + 1,
+                    ev["y_max"] - ev["y_min"] + 1,
+                    linewidth=1.8,
+                    linestyle="--",
+                    edgecolor="#B45309",
+                    facecolor="#FDE68A",
+                    alpha=0.5,
+                )
+                ax.add_patch(rect_d)
+
+            for sr in mission.get("dynamic", {}).get("superseded_routes", []):
+                if len(sr["path"]) >= 2:
+                    xs = [p[0] for p in sr["path"]]
+                    ys = [p[1] for p in sr["path"]]
+                    ax.plot(xs, ys, color="#DC2626", linestyle="--", linewidth=1.6, alpha=0.7)
+
             depot = mission["depot"]
             ax.plot(depot[0], depot[1], "s", color="#C84318", markersize=12, label="Base Depot")
             for camp in mission["camps"]:
@@ -83,23 +106,28 @@ with tab_sim:
                     if len(seg["path"]) >= 2:
                         xs = [p[0] for p in seg["path"]]
                         ys = [p[1] for p in seg["path"]]
-                        ax.plot(xs, ys, color=col, linewidth=2.3, label=ds["callsign"] if s_i == 0 else "")
+                        ax.plot(xs, ys, color=col, linewidth=2.4, label=ds["callsign"] if s_i == 0 else "")
 
             ax.set_xlim(-0.5, mission["scenario"]["grid_width"] - 0.5)
             ax.set_ylim(-0.5, mission["scenario"]["grid_height"] - 0.5)
             ax.legend(loc="upper right", fontsize=8)
-            ax.set_title(mission["scenario"]["title"])
+            ax.set_title(f"{mission['scenario']['title']} (Garis Merah Putus = Jalur Lama Terblokir)")
             st.pyplot(fig)
 
         with col_info:
+            st.subheader("Log Adaptasi Rintangan Dinamis")
+            if replan_log:
+                for r in replan_log:
+                    st.warning(r["summary"])
+            else:
+                st.info("Tidak ada manuver re-planning aktif.")
+
             st.subheader("Manifes Rute Armada")
             for ds in eval_data["drone_schedules"]:
                 st.write(
-                    f"**{ds['callsign']}** ({ds['total_distance_km']} km, {ds['total_time_min']} mnt): "
+                    f"**{ds['callsign']}** [{ds['status']}] ({ds['total_distance_km']} km): "
                     + " -> ".join(ds["route_labels"])
                 )
-            st.subheader("Benchmark Pencarian Jalur")
-            st.dataframe(mission["pathfinding"]["benchmark"], use_container_width=True)
 
 with tab_video:
     video_path = os.path.join(os.path.dirname(__file__), "media", "aerorelief_mockup_demo.mp4")

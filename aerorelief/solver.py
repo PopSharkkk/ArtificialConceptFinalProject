@@ -3,8 +3,9 @@
 import json
 import math
 from typing import Any, Dict, List, Tuple
+from .dynamic import simulate_dynamic_mission
 from .environment import TopographicEnvironment
-from .models import Camp, HazardZone
+from .models import Camp, DynamicHazardEvent, HazardZone
 from .pathfinding import (
     benchmark_pathfinding_algorithms,
     compute_distance_matrices,
@@ -14,7 +15,7 @@ from .scenarios import build_drone_fleet, get_scenario
 
 
 def _build_timeline_frames(
-    drone_schedules: List[Dict[str, Any]], total_duration_min: float, steps: int = 120
+    drone_schedules: List[Dict[str, Any]], total_duration_min: float, steps: int = 140
 ) -> List[Dict[str, Any]]:
     """Build sampled timeline keyframes for deterministic playback synchronization."""
     if total_duration_min <= 0:
@@ -41,7 +42,6 @@ def _build_timeline_frames(
                     state = "RELOAD" if seg["is_reload_trip"] else "TERBANG"
                     break
             if pos is None and ds["segments"]:
-                # Check if completed or dropping off
                 if t >= ds["segments"][-1]["end_min"]:
                     last_pt = ds["segments"][-1]["path"][-1]
                     pos = [last_pt[0], last_pt[1]]
@@ -58,13 +58,46 @@ def _build_timeline_frames(
     return frames
 
 
+def _parse_injected_events(raw_events: List[Dict[str, Any]]) -> List[DynamicHazardEvent]:
+    parsed: List[DynamicHazardEvent] = []
+    for i, ev in enumerate(raw_events):
+        cells = None
+        if ev.get("cells"):
+            cells = [(int(c[0]), int(c[1])) for c in ev["cells"]]
+            xs = [c[0] for c in cells]
+            ys = [c[1] for c in cells]
+            x_min, x_max = min(xs), max(xs)
+            y_min, y_max = min(ys), max(ys)
+        else:
+            x_min = int(ev.get("x_min", 0))
+            x_max = int(ev.get("x_max", x_min))
+            y_min = int(ev.get("y_min", 0))
+            y_max = int(ev.get("y_max", y_min))
+
+        expire_val = ev.get("expire_min")
+        parsed.append(
+            DynamicHazardEvent(
+                id=str(ev.get("id", f"injected_{i + 1}")),
+                name=str(ev.get("name", f"Rintangan Mendadak #{i + 1}")),
+                trigger_min=float(ev.get("trigger_min", 10.0)),
+                expire_min=float(expire_val) if expire_val is not None else None,
+                x_min=x_min,
+                x_max=x_max,
+                y_min=y_min,
+                y_max=y_max,
+                hazard_type=str(ev.get("hazard_type", "Rintangan Baru")),
+                cells=cells,
+            )
+        )
+    return parsed
+
+
 def solve_mission(payload: Dict[str, Any] | None = None) -> Dict[str, Any]:
-    """Solve full two-tier optimization and return JSON-serializable mission bundle."""
+    """Solve two-tier optimization plus dynamic mid-flight obstacle re-planning."""
     req = payload or {}
     scenario_id = str(req.get("scenario_id", "semeru"))
     scenario = get_scenario(scenario_id)
 
-    # Parse custom or default camps
     if "custom_camps" in req and req["custom_camps"] is not None:
         camps: List[Camp] = []
         for idx, c in enumerate(req["custom_camps"]):
@@ -86,7 +119,6 @@ def solve_mission(payload: Dict[str, Any] | None = None) -> Dict[str, Any]:
     depot = tuple(req.get("depot", scenario.depot))
     depot_coord = (int(depot[0]), int(depot[1]))
 
-    # Parse custom obstacles if provided
     if "custom_obstacles" in req and req["custom_obstacles"] is not None:
         hazard_zones: List[HazardZone] = []
         extra_obstacles: List[Tuple[int, int]] = [
@@ -104,7 +136,6 @@ def solve_mission(payload: Dict[str, Any] | None = None) -> Dict[str, Any]:
         extra_obstacles=extra_obstacles,
     )
 
-    # Empty state check
     if len(camps) == 0:
         return {
             "reachable": True,
@@ -114,6 +145,7 @@ def solve_mission(payload: Dict[str, Any] | None = None) -> Dict[str, Any]:
             "obstacles": [list(o) for o in sorted(env.obstacles)],
             "elevation": env.elevation,
             "camps": [],
+            "dynamic": {"enabled": False, "events": [], "replan_log": [], "superseded_routes": []},
             "message": "Tidak ada posko penerima bantuan. Tambahkan posko pada peta atau muat ulang skenario.",
         }
 
@@ -128,6 +160,8 @@ def solve_mission(payload: Dict[str, Any] | None = None) -> Dict[str, Any]:
     pop_size = int(req.get("pop_size", 50))
     generations = int(req.get("generations", 80))
     seed = int(req.get("seed", 42))
+    enable_dynamic = bool(req.get("enable_dynamic_events", True))
+    injected_events = _parse_injected_events(req.get("injected_events") or [])
 
     matrices = compute_distance_matrices(env, depot_coord, camps, algorithm=path_algorithm)
     if matrices["depot_blocked"] or matrices["unreachable_camp_ids"]:
@@ -148,6 +182,7 @@ def solve_mission(payload: Dict[str, Any] | None = None) -> Dict[str, Any]:
             "elevation": env.elevation,
             "camps": [c.to_dict() for c in camps],
             "unreachable_camp_ids": matrices["unreachable_camp_ids"],
+            "dynamic": {"enabled": enable_dynamic, "events": [], "replan_log": [], "superseded_routes": []},
             "message": msg,
         }
 
@@ -174,10 +209,53 @@ def solve_mission(payload: Dict[str, Any] | None = None) -> Dict[str, Any]:
         seed=seed,
     ).run()
 
-    active_routing = sa_result if routing_algorithm == "sa" else ga_result
+    active_routing = dict(sa_result if routing_algorithm == "sa" else ga_result)
+    initial_eval = active_routing["evaluation"]
+    initial_distance_km = initial_eval["total_distance_km"]
+
+    all_dyn_events: List[DynamicHazardEvent] = []
+    if enable_dynamic:
+        all_dyn_events.extend(scenario.dynamic_events)
+    all_dyn_events.extend(injected_events)
+
+    replan_log: List[Dict[str, Any]] = []
+    superseded_routes: List[Dict[str, Any]] = []
+
+    if all_dyn_events:
+        dyn_sim = simulate_dynamic_mission(
+            scenario=scenario,
+            base_obstacles=env.obstacles,
+            depot=depot_coord,
+            camps=camps,
+            drones=drones,
+            initial_eval=initial_eval,
+            dynamic_events=all_dyn_events,
+            path_algorithm=path_algorithm,
+        )
+        if not dyn_sim["reachable"]:
+            return {
+                "reachable": False,
+                "empty": False,
+                "scenario": scenario.to_dict(),
+                "depot": list(depot_coord),
+                "obstacles": [list(o) for o in sorted(env.obstacles)],
+                "elevation": env.elevation,
+                "camps": [c.to_dict() for c in camps],
+                "dynamic": {
+                    "enabled": enable_dynamic,
+                    "events": [e.to_dict() for e in all_dyn_events],
+                    "replan_log": dyn_sim.get("replan_log", []),
+                    "superseded_routes": dyn_sim.get("superseded_routes", []),
+                },
+                "message": dyn_sim["message"],
+            }
+        active_routing["evaluation"] = dyn_sim["evaluation"]
+        replan_log = dyn_sim["replan_log"]
+        superseded_routes = dyn_sim["superseded_routes"]
+
     eval_data = active_routing["evaluation"]
     makespan = eval_data["makespan_min"]
-    timeline = _build_timeline_frames(eval_data["drone_schedules"], makespan, steps=120)
+    timeline = _build_timeline_frames(eval_data["drone_schedules"], makespan, steps=140)
 
     return {
         "reachable": True,
@@ -196,6 +274,7 @@ def solve_mission(payload: Dict[str, Any] | None = None) -> Dict[str, Any]:
             "generations": generations,
             "max_payload_kg": max_payload_kg,
             "max_battery_km": max_battery_km,
+            "enable_dynamic_events": enable_dynamic,
         },
         "pathfinding": {
             "selected_algorithm": path_algorithm,
@@ -224,14 +303,22 @@ def solve_mission(payload: Dict[str, Any] | None = None) -> Dict[str, Any]:
                 "history": sa_result["history"],
             },
         },
+        "dynamic": {
+            "enabled": enable_dynamic or len(injected_events) > 0,
+            "events": [e.to_dict() for e in all_dyn_events],
+            "replan_log": replan_log,
+            "superseded_routes": superseded_routes,
+            "initial_distance_km": initial_distance_km,
+            "adapted_distance_km": eval_data["total_distance_km"],
+        },
         "timeline": timeline,
     }
 
 
 def export_precomputed_json(output_path: str) -> None:
-    """Precompute all 3 default scenarios for offline static web fallback."""
+    """Precompute all 3 default scenarios (with dynamic events) for static web fallback."""
     bundle = {}
     for sc_id in ("semeru", "cianjur", "demak"):
-        bundle[sc_id] = solve_mission({"scenario_id": sc_id})
+        bundle[sc_id] = solve_mission({"scenario_id": sc_id, "enable_dynamic_events": True})
     with open(output_path, "w", encoding="utf-8") as f:
         json.dump(bundle, f)

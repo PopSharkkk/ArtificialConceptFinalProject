@@ -1,6 +1,6 @@
-"""AeroRelief core package: Python AI Search & Multi-Drone Routing Engine."""
+"""AeroRelief core package: Python AI Search & Multi-Drone Dynamic Routing Engine."""
 
-from .models import Camp, DroneSpec, HazardZone, Hill, Scenario
+from .models import Camp, DroneSpec, DynamicHazardEvent, HazardZone, Hill, Scenario
 from .environment import TopographicEnvironment
 from .pathfinding import (
     PathResult,
@@ -15,12 +15,19 @@ from .routing import (
     SimulatedAnnealingOptimizer,
     decode_and_evaluate,
 )
+from .dynamic import (
+    active_dynamic_obstacles_at,
+    event_cells,
+    replan_drone_from_midair,
+    simulate_dynamic_mission,
+)
 from .scenarios import SCENARIOS, get_scenario, list_scenarios
 from .solver import solve_mission
 
 __all__ = [
     "Camp",
     "DroneSpec",
+    "DynamicHazardEvent",
     "HazardZone",
     "Hill",
     "Scenario",
@@ -34,6 +41,10 @@ __all__ = [
     "GeneticDroneOptimizer",
     "SimulatedAnnealingOptimizer",
     "decode_and_evaluate",
+    "active_dynamic_obstacles_at",
+    "event_cells",
+    "replan_drone_from_midair",
+    "simulate_dynamic_mission",
     "SCENARIOS",
     "get_scenario",
     "list_scenarios",

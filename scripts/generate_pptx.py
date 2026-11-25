@@ -172,14 +172,13 @@ def generate_pptx(out_path: str) -> None:
         "(seperti kantong darah, insulin, tabung oksigen portabel, antibiotik, dan kit trauma) menggunakan "
         "armada drone otonom (UAV) pada wilayah terdampak bencana alam yang akses jalannya terputus total.\n\n"
         "Sistem ini dibangun menggunakan bahasa pemrograman Python dengan pendekatan dua tingkat (two-tier "
-        "optimization). Pada tingkat pertama (Perencanaan Jalur Lokal), algoritma Informed Search A* (A-Star) "
-        "dengan fungsi heuristik Euclidean dan penalti elevasi medan bertugas menemukan lintasan terbang fisik "
-        "terpendek yang aman menghindari zona terlarang (no-fly zone, awan panas, longsor, dan koridor SUTET).\n\n"
-        "Pada tingkat kedua (Penjadwalan Armada Global), algoritma Local Search Genetic Algorithm (GA) "
-        "memecahkan persoalan Vehicle Routing Problem with Time Windows and Battery Limits (VRPTW-BL) untuk "
-        "membagi tugas pengiriman antar-drone secara seimbang, menjadwalkan pengisian ulang baterai di Base Depot, "
-        "serta memprioritaskan posko berstatus KRITIS. Hasil optimasi disajikan melalui dashboard web interaktif "
-        "dan video simulasi resolusi tinggi."
+        "optimization) serta kemampuan adaptasi rintangan dinamis (mid-flight re-planning). Pada tingkat pertama, "
+        "algoritma Informed Search A* (A-Star) menghitung lintasan terbang terpendek di atas peta topografi "
+        "dan langsung menghitung ulang jalur memutar dari udara ketika muncul rintangan baru seperti longsor "
+        "susulan atau awan badai bergerak.\n\n"
+        "Pada tingkat kedua, Genetic Algorithm (GA) memecahkan persoalan Vehicle Routing Problem with Time "
+        "Windows and Battery Limits (VRPTW-BL) untuk membagi tugas antar-drone, mengatur pengisian ulang baterai "
+        "di Depot, dan memprioritaskan posko berstatus KRITIS melalui dashboard web interaktif dan video simulasi HD."
     )
     add_card(s2, 0.65, 1.35, 12.0, 5.6, "Deskripsi Lengkap Sistem (206 Kata)", [desc_text], title_color=ACCENT)
 
@@ -224,13 +223,12 @@ def generate_pptx(out_path: str) -> None:
     add_header(s4, "3. Metode Pencarian 1 : Informed Search (Algoritma A*)", "Navigasi Terpendek & Aman di Atas Peta Topografi Berhalangan", 4)
     add_card(
         s4, 0.65, 1.4, 5.9, 5.5,
-        "Formulasi Matematis A* (Python)",
+        "Formulasi A* & Adaptasi Rintangan Dinamis",
         [
-            "- Fungsi evaluasi node: f(n) = g(n) + h(n)",
-            "- Biaya langkah g(n): jarak grid 8-arah (1.0 atau sqrt(2)) + penalti tanjakan elevasi max(0, delta_elev) * 0.004.",
-            "- Heuristik h(n): jarak Euclidean ke tujuan sqrt((x2-x1)^2 + (y2-y1)^2).",
-            "- Karena penalti tanjakan >= 0, h(n) bersifat Admissible dan Consistent sehingga menjamin jalur 100% optimal.",
-            "- Pencegahan diagonal corner-cutting agar rute tidak memotong sudut zona bahaya.",
+            "- Fungsi evaluasi node: f(n) = g(n) + h(n) Euclidean Admissible.",
+            "- Biaya langkah g(n): jarak grid 8-arah + penalti elevasi max(0, delta_elev) * 0.004.",
+            "- Event-Driven Mid-Flight Re-planning: saat muncul rintangan baru atau awan badai bergerak di tengah misi, sistem mendeteksi tabrakan pada sisa jalur terbang.",
+            "- Drone langsung menghitung ulang rute A* dari posisi udara saat itu (tanpa reset ke awal) dan menjadwalkan reload di Depot bila diperlukan.",
         ],
         title_color=BLUE,
     )
@@ -286,14 +284,14 @@ def generate_pptx(out_path: str) -> None:
     poster_img = os.path.join(ROOT_DIR, "media", "video_poster.png")
     s7.shapes.add_picture(poster_img, Inches(0.65), Inches(1.3), width=Inches(8.2))
     add_card(
-        s7, 9.05, 1.3, 3.65, 4.65,
+        s7, 9.05, 1.3, 3.65, 5.1,
         "Fitur Antarmuka Web",
         [
             "- 3 Skenario Bencana Nyata (Semeru, Cianjur, Demak).",
-            "- Pemilih Algoritma A*, UCS, Greedy & GA/SA.",
-            "- Editor Peta: Tambah Posko & Lukis Zona Terlarang langsung di kanvas.",
-            "- Mode Terang & Mode Operasi Malam (WCAG AA).",
-            "- Transport Bar (Putar, Jeda, 0.5x-4x, Scrubber).",
+            "- Rintangan Berubah & Bergerak: simulasi bencana susulan & badai bergeser otomatis.",
+            "- Tombol 'Munculkan Rintangan Mendadak' & lukis rintangan saat drone sedang terbang.",
+            "- Visualisasi jalur lama dibatalkan (merah putus) vs jalur adaptif baru.",
+            "- Mode Terang & Malam + Pemutar Misi.",
         ],
         title_color=ACCENT,
     )

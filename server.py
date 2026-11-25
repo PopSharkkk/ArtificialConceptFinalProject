@@ -20,7 +20,7 @@ def index():
 
 @app.get("/api/health")
 def health():
-    return jsonify({"status": "ok", "engine": "Python AeroRelief AI"})
+    return jsonify({"status": "ok", "engine": "Python AeroRelief AI (Dynamic Re-plan)"})
 
 
 @app.get("/api/scenarios")
@@ -31,6 +31,22 @@ def get_scenarios():
 @app.post("/api/solve")
 def api_solve():
     payload = request.get_json(silent=True) or {}
+    try:
+        result = solve_mission(payload)
+        return jsonify(result)
+    except ValueError as exc:
+        return jsonify({"reachable": False, "error": True, "message": str(exc)}), 400
+
+
+@app.post("/api/replan")
+def api_replan():
+    """Mid-flight adaptive obstacle injection & dynamic re-planning endpoint."""
+    payload = dict(request.get_json(silent=True) or {})
+    injected = list(payload.get("injected_events") or [])
+    new_ev = payload.pop("new_event", None)
+    if new_ev:
+        injected.append(new_ev)
+    payload["injected_events"] = injected
     try:
         result = solve_mission(payload)
         return jsonify(result)

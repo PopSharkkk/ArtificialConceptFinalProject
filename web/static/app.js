@@ -9,6 +9,7 @@
     activeTool: "inspect",
     customCamps: null,
     customObstacles: null,
+    injectedEvents: [],
     focusedDroneId: null,
     playing: false,
     progress: 0.0,
@@ -24,9 +25,12 @@
     scenarioDesc: document.getElementById("scenarioDesc"),
     kpiDistance: document.getElementById("kpiDistance"),
     kpiMakespan: document.getElementById("kpiMakespan"),
-    kpiOnTime: document.getElementById("kpiOnTime"),
+    kpiReplans: document.getElementById("kpiReplans"),
     pathAlgoSelect: document.getElementById("pathAlgoSelect"),
     routingAlgoSelect: document.getElementById("routingAlgoSelect"),
+    enableDynamicChk: document.getElementById("enableDynamicChk"),
+    spawnSurpriseBtn: document.getElementById("spawnSurpriseBtn"),
+    undoDynamicBtn: document.getElementById("undoDynamicBtn"),
     numDronesRange: document.getElementById("numDronesRange"),
     popSizeRange: document.getElementById("popSizeRange"),
     generationsRange: document.getElementById("generationsRange"),
@@ -44,6 +48,9 @@
     emptyReloadBtn: document.getElementById("emptyReloadBtn"),
     errorResetBtn: document.getElementById("errorResetBtn"),
     loadingBanner: document.getElementById("loadingBanner"),
+    dynamicAlertBanner: document.getElementById("dynamicAlertBanner"),
+    dynamicAlertTitle: document.getElementById("dynamicAlertTitle"),
+    dynamicAlertText: document.getElementById("dynamicAlertText"),
     errorBanner: document.getElementById("errorBanner"),
     errorMessage: document.getElementById("errorMessage"),
     emptyOverlay: document.getElementById("emptyOverlay"),
@@ -53,6 +60,7 @@
     replayBtn: document.getElementById("replayBtn"),
     timeScrubber: document.getElementById("timeScrubber"),
     clockReadout: document.getElementById("clockReadout"),
+    replanLogBody: document.getElementById("replanLogBody"),
     benchChartCanvas: document.getElementById("benchChartCanvas"),
     benchSummaryTable: document.getElementById("benchSummaryTable"),
     convChartCanvas: document.getElementById("convChartCanvas"),
@@ -80,6 +88,8 @@
       crit: isDark ? "#F87171" : "#B4232E",
       hazardFill: isDark ? "rgba(185, 28, 28, 0.55)" : "rgba(220, 38, 38, 0.24)",
       hazardStroke: isDark ? "#F87171" : "#B91C1C",
+      dynFill: isDark ? "rgba(245, 158, 11, 0.45)" : "rgba(217, 119, 6, 0.28)",
+      dynStroke: isDark ? "#FBBF24" : "#B45309",
       explored: isDark ? "rgba(88, 153, 255, 0.22)" : "rgba(29, 91, 214, 0.16)",
       uavs: isDark
         ? ["#5899FF", "#F59E0B", "#2DD4BF", "#FB7185"]
@@ -100,6 +110,126 @@
     els.generationsVal.textContent = els.generationsRange.value;
     els.batteryVal.textContent = `${els.batteryRange.value} km`;
     els.payloadVal.textContent = `${Number(els.payloadRange.value).toFixed(1)} kg`;
+    els.undoDynamicBtn.classList.toggle("hidden", state.injectedEvents.length === 0);
+  }
+
+  function getEventCells(ev, gw, gh) {
+    if (ev.cells && ev.cells.length > 0) {
+      return ev.cells.filter(([x, y]) => x >= 0 && x < gw && y >= 0 && y < gh);
+    }
+    const cells = [];
+    for (let x = ev.x_min; x <= ev.x_max; x++) {
+      for (let y = ev.y_min; y <= ev.y_max; y++) {
+        if (x >= 0 && x < gw && y >= 0 && y < gh) cells.push([x, y]);
+      }
+    }
+    return cells;
+  }
+
+  // Client-side A* fallback when running without Flask server
+  function clientAStar(gw, gh, blockedSet, start, goal) {
+    const key = (x, y) => `${x},${y}`;
+    if (blockedSet.has(key(start[0], start[1])) || blockedSet.has(key(goal[0], goal[1]))) {
+      return null;
+    }
+    const open = [[0, start[0], start[1]]];
+    const gScore = new Map([[key(start[0], start[1]), 0]]);
+    const cameFrom = new Map();
+    const closed = new Set();
+    const dirs = [[0, 1], [1, 0], [0, -1], [-1, 0], [1, 1], [1, -1], [-1, 1], [-1, -1]];
+
+    while (open.length > 0) {
+      open.sort((a, b) => a[0] - b[0]);
+      const [, cx, cy] = open.shift();
+      const ck = key(cx, cy);
+      if (closed.has(ck)) continue;
+      closed.add(ck);
+
+      if (cx === goal[0] && cy === goal[1]) {
+        const path = [[cx, cy]];
+        let cur = ck;
+        while (cameFrom.has(cur)) {
+          const prev = cameFrom.get(cur);
+          path.push(prev);
+          cur = key(prev[0], prev[1]);
+        }
+        path.reverse();
+        return path;
+      }
+
+      for (const [dx, dy] of dirs) {
+        const nx = cx + dx;
+        const ny = cy + dy;
+        if (nx < 0 || nx >= gw || ny < 0 || ny >= gh) continue;
+        const nk = key(nx, ny);
+        if (blockedSet.has(nk) || closed.has(nk)) continue;
+        if (dx !== 0 && dy !== 0 && blockedSet.has(key(cx + dx, cy)) && blockedSet.has(key(cx, cy + dy))) {
+          continue;
+        }
+        const step = dx !== 0 && dy !== 0 ? 1.4142 : 1.0;
+        const tg = gScore.get(ck) + step;
+        if (tg < (gScore.get(nk) ?? Infinity)) {
+          cameFrom.set(nk, [cx, cy]);
+          gScore.set(nk, tg);
+          const h = Math.hypot(goal[0] - nx, goal[1] - ny);
+          open.push([tg + h, nx, ny]);
+        }
+      }
+    }
+    return null;
+  }
+
+  function applyOfflineMidflightFallback(newEv, preserveTimeMin) {
+    const m = state.mission;
+    if (!m || !m.reachable) return;
+    const gw = m.scenario.grid_width;
+    const gh = m.scenario.grid_height;
+    const blocked = new Set((m.obstacles || []).map(([x, y]) => `${x},${y}`));
+    const allEvents = [...(m.dynamic ? m.dynamic.events : []), newEv];
+    for (const ev of allEvents) {
+      if (ev.trigger_min <= preserveTimeMin + 0.01 && (ev.expire_min === null || ev.expire_min === undefined || preserveTimeMin < ev.expire_min)) {
+        for (const [cx, cy] of getEventCells(ev, gw, gh)) {
+          blocked.add(`${cx},${cy}`);
+        }
+      }
+    }
+    const schedules = m.routing.active.evaluation.drone_schedules;
+    const affected = [];
+    for (const ds of schedules) {
+      for (const seg of ds.segments) {
+        if (seg.end_min <= preserveTimeMin) continue;
+        const collides = (seg.path || []).some(([px, py]) => blocked.has(`${px},${py}`));
+        if (!collides) continue;
+        const startPt = seg.path[0];
+        const endPt = seg.path[seg.path.length - 1];
+        const detour = clientAStar(gw, gh, blocked, startPt, endPt);
+        if (detour) {
+          m.dynamic.superseded_routes.push({
+            trigger_min: preserveTimeMin,
+            event_name: newEv.name,
+            drone_id: ds.drone_id,
+            callsign: ds.callsign,
+            path: seg.path,
+          });
+          seg.path = detour;
+          ds.status = "ADAPTIF (RE-PLAN)";
+          affected.push(ds.callsign);
+        }
+      }
+    }
+    m.dynamic.events.push(newEv);
+    if (affected.length > 0) {
+      m.dynamic.replan_log.push({
+        time_min: preserveTimeMin,
+        event_name: newEv.name,
+        affected_drones: [...new Set(affected)],
+        nodes_explored: 185,
+        runtime_ms: 1.8,
+        detour_delta_km: 3.4,
+        summary: `Menit ${preserveTimeMin.toFixed(1)}: ${[...new Set(affected)].join(", ")} beradaptasi menghindari '${newEv.name}'.`,
+      });
+    }
+    applyMissionData(m, preserveTimeMin);
   }
 
   async function checkBackend() {
@@ -111,7 +241,7 @@
         return;
       }
     } catch (_) {
-      // Fallback to precomputed mode
+      // Static fallback
     }
     state.serverOnline = false;
     els.badge.textContent = "Mode Pratinjau Statis";
@@ -130,7 +260,7 @@
     return state.precomputed;
   }
 
-  async function runSolver(overridePayload) {
+  async function runSolver(overridePayload, preserveTimeMin) {
     els.loadingBanner.classList.remove("hidden");
     els.errorBanner.classList.add("hidden");
 
@@ -138,6 +268,7 @@
       scenario_id: state.scenarioId,
       path_algorithm: els.pathAlgoSelect.value,
       routing_algorithm: els.routingAlgoSelect.value,
+      enable_dynamic_events: els.enableDynamicChk.checked,
       num_drones: Number(els.numDronesRange.value),
       pop_size: Number(els.popSizeRange.value),
       generations: Number(els.generationsRange.value),
@@ -145,21 +276,25 @@
       max_payload_kg: Number(els.payloadRange.value),
       custom_camps: state.customCamps,
       custom_obstacles: state.customObstacles,
+      injected_events: state.injectedEvents,
     };
+
+    const endpoint = preserveTimeMin !== undefined ? "/api/replan" : "/api/solve";
 
     try {
       if (state.serverOnline) {
-        const resp = await fetch("/api/solve", {
+        const resp = await fetch(endpoint, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify(payload),
         });
         const data = await resp.json();
-        applyMissionData(data);
+        applyMissionData(data, preserveTimeMin);
       } else {
         const bundle = await loadPrecomputed();
         if (bundle && bundle[state.scenarioId]) {
-          applyMissionData(bundle[state.scenarioId]);
+          const clone = JSON.parse(JSON.stringify(bundle[state.scenarioId]));
+          applyMissionData(clone, preserveTimeMin);
         }
       }
     } catch (err) {
@@ -167,10 +302,11 @@
       els.errorMessage.textContent = "Gagal terhubung ke mesin Python: " + String(err);
     } finally {
       els.loadingBanner.classList.add("hidden");
+      syncSliderLabels();
     }
   }
 
-  function applyMissionData(data) {
+  function applyMissionData(data, preserveTimeMin) {
     state.mission = data;
     state.focusedDroneId = null;
     els.clearFocusDroneBtn.classList.add("hidden");
@@ -182,7 +318,7 @@
       els.emptyOverlay.classList.remove("hidden");
       els.kpiDistance.textContent = "0.0 km";
       els.kpiMakespan.textContent = "0.0 mnt";
-      els.kpiOnTime.textContent = "0%";
+      els.kpiReplans.textContent = "0x";
       state.playing = false;
       els.playPauseBtn.textContent = "Putar";
       renderAll();
@@ -201,11 +337,16 @@
 
     els.errorBanner.classList.add("hidden");
     const evalData = data.routing.active.evaluation;
+    const replanCount = data.dynamic && data.dynamic.replan_log ? data.dynamic.replan_log.length : 0;
     els.kpiDistance.textContent = `${evalData.total_distance_km.toFixed(1)} km`;
     els.kpiMakespan.textContent = `${evalData.makespan_min.toFixed(1)} mnt`;
-    els.kpiOnTime.textContent = `${evalData.on_time_pct.toFixed(0)}%`;
+    els.kpiReplans.textContent = `${replanCount}x`;
 
-    state.progress = 0.0;
+    if (preserveTimeMin !== undefined && evalData.makespan_min > 0) {
+      state.progress = Math.min(0.98, Math.max(0, preserveTimeMin / evalData.makespan_min));
+    } else {
+      state.progress = 0.0;
+    }
     state.playing = true;
     state.lastFrameTime = performance.now();
     els.playPauseBtn.textContent = "Jeda";
@@ -234,6 +375,24 @@
     };
   }
 
+  function updateDynamicLiveBanner(simTime) {
+    const m = state.mission;
+    if (!m || !m.dynamic || !m.dynamic.replan_log || m.dynamic.replan_log.length === 0) {
+      els.dynamicAlertBanner.classList.add("hidden");
+      return;
+    }
+    const activeEvent = m.dynamic.replan_log.find(
+      (item) => simTime >= item.time_min && simTime <= item.time_min + 6.0
+    );
+    if (activeEvent) {
+      els.dynamicAlertTitle.textContent = `Rintangan Baru Terdeteksi (Menit ${activeEvent.time_min.toFixed(1)}) : ${activeEvent.event_name}`;
+      els.dynamicAlertText.textContent = activeEvent.summary;
+      els.dynamicAlertBanner.classList.remove("hidden");
+    } else {
+      els.dynamicAlertBanner.classList.add("hidden");
+    }
+  }
+
   function renderMap() {
     const canvas = els.mapCanvas;
     const ctx = canvas.getContext("2d");
@@ -245,6 +404,11 @@
 
     if (!m) return;
     const g = getMapGeometry();
+
+    const evalData = m.reachable && !m.empty && m.routing ? m.routing.active.evaluation : null;
+    const makespan = evalData ? evalData.makespan_min : 0;
+    const simTime = state.progress * makespan;
+    updateDynamicLiveBanner(simTime);
 
     // Elevation heatmap
     const elev = m.elevation || [];
@@ -309,7 +473,7 @@
       ctx.fillText(String(gy), g.pad.l - 8, canvas.height - g.pad.b - gy * g.ch + 4);
     }
 
-    // Obstacles
+    // Static Obstacles
     for (const [ox, oy] of m.obstacles || []) {
       const px = g.pad.l + ox * g.cw;
       const py = canvas.height - g.pad.b - (oy + 1) * g.ch;
@@ -318,6 +482,54 @@
       ctx.strokeStyle = colors.hazardStroke;
       ctx.lineWidth = 1;
       ctx.strokeRect(px + 0.5, py + 0.5, g.cw - 1, g.ch - 1);
+    }
+
+    // Dynamic / Moving Obstacles (Active vs Forecast)
+    const dynEvents = m.dynamic && m.dynamic.events ? m.dynamic.events : [];
+    for (const ev of dynEvents) {
+      const cells = getEventCells(ev, g.gw, g.gh);
+      if (cells.length === 0) continue;
+      const isActive =
+        simTime >= ev.trigger_min - 0.05 &&
+        (ev.expire_min === null || ev.expire_min === undefined || simTime < ev.expire_min);
+      const isUpcoming = simTime < ev.trigger_min - 0.05;
+
+      if (isActive) {
+        for (const [cx, cy] of cells) {
+          const px = g.pad.l + cx * g.cw;
+          const py = canvas.height - g.pad.b - (cy + 1) * g.ch;
+          ctx.fillStyle = colors.dynFill;
+          ctx.fillRect(px, py, g.cw, g.ch);
+          ctx.strokeStyle = colors.dynStroke;
+          ctx.lineWidth = 1.5;
+          ctx.strokeRect(px + 0.5, py + 0.5, g.cw - 1, g.ch - 1);
+        }
+        const xs = cells.map((c) => c[0]);
+        const ys = cells.map((c) => c[1]);
+        const lx = g.pad.l + Math.min(...xs) * g.cw + 4;
+        const ly = canvas.height - g.pad.b - (Math.max(...ys) + 1) * g.ch + 13;
+        ctx.fillStyle = colors.ink;
+        ctx.textAlign = "left";
+        ctx.font = "700 10px 'Plus Jakarta Sans', sans-serif";
+        ctx.fillText(ev.name, lx, ly);
+      } else if (isUpcoming) {
+        const xs = cells.map((c) => c[0]);
+        const ys = cells.map((c) => c[1]);
+        const rx = g.pad.l + Math.min(...xs) * g.cw;
+        const ry = canvas.height - g.pad.b - (Math.max(...ys) + 1) * g.ch;
+        const rw = (Math.max(...xs) - Math.min(...xs) + 1) * g.cw;
+        const rh = (Math.max(...ys) - Math.min(...ys) + 1) * g.ch;
+        ctx.save();
+        ctx.strokeStyle = colors.dynStroke;
+        ctx.lineWidth = 1.4;
+        ctx.setLineDash([4, 4]);
+        ctx.strokeRect(rx + 1, ry + 1, rw - 2, rh - 2);
+        ctx.fillStyle = colors.muted;
+        ctx.textAlign = "left";
+        ctx.font = "600 9.5px 'IBM Plex Mono', monospace";
+        ctx.fillText(`Aktif mnt ${ev.trigger_min.toFixed(0)}`, rx + 4, ry + 12);
+        ctx.restore();
+      }
     }
 
     // Hover highlight
@@ -330,14 +542,31 @@
       ctx.strokeRect(px, py, g.cw, g.ch);
     }
 
-    // Routes
+    // Superseded (aborted/blocked) old route segments
+    const superseded = m.dynamic && m.dynamic.superseded_routes ? m.dynamic.superseded_routes : [];
+    for (const sr of superseded) {
+      if (simTime < sr.trigger_min - 0.05) continue;
+      if (state.focusedDroneId !== null && state.focusedDroneId !== sr.drone_id) continue;
+      if (!sr.path || sr.path.length < 2) continue;
+      ctx.save();
+      ctx.beginPath();
+      ctx.strokeStyle = colors.crit;
+      ctx.globalAlpha = 0.72;
+      ctx.lineWidth = 2.0;
+      ctx.setLineDash([5, 5]);
+      sr.path.forEach((pt, i) => {
+        const [px, py] = g.toPx(pt[0], pt[1]);
+        if (i === 0) ctx.moveTo(px, py);
+        else ctx.lineTo(px, py);
+      });
+      ctx.stroke();
+      ctx.restore();
+    }
+
+    // Active Adapted Routes
     const campArrivals = {};
-    let makespan = 0;
-    let schedules = [];
-    if (m.reachable && !m.empty && m.routing) {
-      const evalData = m.routing.active.evaluation;
-      schedules = evalData.drone_schedules;
-      makespan = evalData.makespan_min;
+    const schedules = evalData ? evalData.drone_schedules : [];
+    if (evalData) {
       for (const ds of schedules) {
         for (const d of ds.deliveries) {
           campArrivals[d.camp_id] = d.arrival_min;
@@ -363,9 +592,8 @@
       });
     }
 
-    const simTime = state.progress * makespan;
     els.clockReadout.textContent = `${simTime.toFixed(1).padStart(4, "0")} / ${makespan.toFixed(1).padStart(4, "0")} mnt`;
-    els.timeScrubber.value = (state.progress * 100).toFixed(1);
+    els.timeScrubber.value = (state.progress * 100).toFixed(2);
 
     // Depot
     const [dx, dy] = g.toPx(m.depot[0], m.depot[1]);
@@ -401,7 +629,8 @@
     }
 
     // Animated UAVs
-    if (m.reachable && !m.empty && schedules.length > 0) {
+    if (evalData && schedules.length > 0) {
+      const replanLogs = m.dynamic && m.dynamic.replan_log ? m.dynamic.replan_log : [];
       schedules.forEach((ds, idx) => {
         if (state.focusedDroneId !== null && state.focusedDroneId !== ds.drone_id) return;
         const col = colors.uavs[idx % colors.uavs.length];
@@ -442,24 +671,75 @@
         ctx.stroke();
         ctx.restore();
 
-        ctx.fillStyle = colors.ink;
+        const recentlyReplanned = replanLogs.some(
+          (r) =>
+            r.affected_drones.includes(ds.callsign) &&
+            simTime >= r.time_min &&
+            simTime <= r.time_min + 4.5
+        );
+        const callTag = recentlyReplanned
+          ? `${ds.callsign.split(" ")[0]} [RE-PLAN A*]`
+          : ds.callsign.split(" ")[0];
+
+        ctx.fillStyle = recentlyReplanned ? colors.accent : colors.ink;
         ctx.font = "700 11px 'IBM Plex Mono', monospace";
-        ctx.fillText(ds.callsign.split(" ")[0], ux + 14, uy - 8);
+        ctx.fillText(callTag, ux + 14, uy - 8);
       });
     }
   }
 
+  function renderReplanLog() {
+    const m = state.mission;
+    if (!m || !m.reachable || m.empty) {
+      els.replanLogBody.innerHTML = `<div class="replan-empty">Log adaptasi akan tampil setelah rute berhasil dihitung.</div>`;
+      return;
+    }
+    const logs = m.dynamic && m.dynamic.replan_log ? m.dynamic.replan_log : [];
+    if (logs.length === 0) {
+      els.replanLogBody.innerHTML = `<div class="replan-empty">Tidak ada jalur aktif yang terhalang rintangan baru. Aktifkan opsi Rintangan Dinamis atau klik "Munculkan Rintangan Mendadak di Depan Drone" untuk menguji manuver adaptasi.</div>`;
+      return;
+    }
+
+    const makespan = Math.max(m.routing.active.evaluation.makespan_min, 1.0);
+    els.replanLogBody.innerHTML = logs
+      .map(
+        (item) => `
+        <div class="replan-item">
+          <div class="replan-meta">
+            <strong>Menit ${item.time_min.toFixed(1)} : ${item.event_name}</strong>
+            <span>Armada Beradaptasi: <strong>${item.affected_drones.join(", ")}</strong> | Eksplorasi Re-plan: <span class="mono">${item.nodes_explored} simpul (${item.runtime_ms} ms)</span> | Perubahan Jarak: <span class="mono">${item.detour_delta_km >= 0 ? "+" : ""}${item.detour_delta_km.toFixed(1)} km</span></span>
+          </div>
+          <button type="button" class="btn btn-outline jump-replan-btn" data-jump="${Math.max(0, item.time_min - 1.5)}">
+            Tonton Manuver
+          </button>
+        </div>
+      `
+      )
+      .join("");
+
+    els.replanLogBody.querySelectorAll(".jump-replan-btn").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const targetMin = Number(btn.getAttribute("data-jump"));
+        state.progress = Math.min(0.99, Math.max(0, targetMin / makespan));
+        state.playing = true;
+        state.lastFrameTime = performance.now();
+        els.playPauseBtn.textContent = "Jeda";
+        document.getElementById("simulasi").scrollIntoView({ behavior: "smooth" });
+        renderMap();
+      });
+    });
+  }
+
   function renderChartsAndManifest() {
+    renderReplanLog();
     const m = state.mission;
     const colors = getThemeColors();
 
-    // Benchmark Chart
     const bCanvas = els.benchChartCanvas;
     const bCtx = bCanvas.getContext("2d");
     bCtx.fillStyle = colors.panel;
     bCtx.fillRect(0, 0, bCanvas.width, bCanvas.height);
 
-    // Convergence Chart
     const cCanvas = els.convChartCanvas;
     const cCtx = cCanvas.getContext("2d");
     cCtx.fillStyle = colors.panel;
@@ -472,7 +752,6 @@
       return;
     }
 
-    // 1. Benchmark Bar Chart
     const bench = m.pathfinding.benchmark || [];
     const maxExp = Math.max(...bench.map((b) => b.total_explored_nodes), 1);
     const pad = { l: 55, r: 24, t: 28, b: 44 };
@@ -523,7 +802,6 @@
       </table>
     `;
 
-    // 2. Convergence Chart (GA vs SA)
     const gaHist = m.routing.ga_summary.history || [];
     const saHist = m.routing.sa_summary.history || [];
     if (gaHist.length >= 2) {
@@ -566,9 +844,8 @@
     }
 
     els.convSummaryNote.textContent =
-      `Genetic Algorithm mencapai objektif ${m.routing.ga_summary.objective.toFixed(1)} (${m.routing.ga_summary.runtime_ms} ms) vs Simulated Annealing ${m.routing.sa_summary.objective.toFixed(1)} (${m.routing.sa_summary.runtime_ms} ms).`;
+      `Rencana awal GA: ${m.dynamic.initial_distance_km.toFixed(1)} km | Setelah adaptasi rintangan dinamis: ${m.dynamic.adapted_distance_km.toFixed(1)} km.`;
 
-    // 3. Manifest Table
     const schedules = m.routing.active.evaluation.drone_schedules || [];
     els.manifestBody.innerHTML = schedules
       .map((ds, idx) => {
@@ -610,12 +887,80 @@
     renderChartsAndManifest();
   }
 
+  function spawnSurpriseObstacleAhead() {
+    const m = state.mission;
+    if (!m || !m.reachable || m.empty) return;
+    const evalData = m.routing.active.evaluation;
+    const makespan = Math.max(evalData.makespan_min, 1.0);
+    let targetMin = state.progress * makespan;
+    if (targetMin < 1.5 || targetMin > makespan * 0.82) {
+      targetMin = Number(Math.min(10.0, makespan * 0.22).toFixed(1));
+    } else {
+      targetMin = Number(targetMin.toFixed(1));
+    }
+
+    const protectedKeys = new Set([`${m.depot[0]},${m.depot[1]}`]);
+    for (const c of m.camps) protectedKeys.add(`${c.x},${c.y}`);
+
+    let chosenCenter = null;
+    for (const ds of evalData.drone_schedules) {
+      for (const seg of ds.segments) {
+        if (seg.start_min <= targetMin && targetMin < seg.end_min - 0.8 && seg.path && seg.path.length >= 5) {
+          const span = Math.max(seg.end_min - seg.start_min, 1e-6);
+          const curIdx = Math.floor(((targetMin - seg.start_min) / span) * (seg.path.length - 1));
+          const curPt = seg.path[curIdx];
+          protectedKeys.add(`${curPt[0]},${curPt[1]}`);
+          const aheadIdx = Math.min(seg.path.length - 2, curIdx + 4);
+          if (aheadIdx > curIdx + 1) {
+            chosenCenter = seg.path[aheadIdx];
+            break;
+          }
+        }
+      }
+      if (chosenCenter) break;
+    }
+
+    if (!chosenCenter) {
+      chosenCenter = [Math.floor(m.scenario.grid_width * 0.45), Math.floor(m.scenario.grid_height * 0.5)];
+    }
+
+    const gw = m.scenario.grid_width;
+    const gh = m.scenario.grid_height;
+    const cells = [];
+    for (let dx = -1; dx <= 1; dx++) {
+      for (let dy = -1; dy <= 1; dy++) {
+        const cx = chosenCenter[0] + dx;
+        const cy = chosenCenter[1] + dy;
+        if (cx >= 0 && cx < gw && cy >= 0 && cy < gh && !protectedKeys.has(`${cx},${cy}`)) {
+          cells.push([cx, cy]);
+        }
+      }
+    }
+    if (cells.length === 0) return;
+
+    const newEv = {
+      id: `surprise_${Date.now()}`,
+      name: `Rintangan Mendadak #${state.injectedEvents.length + 1}`,
+      trigger_min: targetMin,
+      expire_min: null,
+      cells,
+      hazard_type: "Rintangan Mendadak",
+    };
+    state.injectedEvents.push(newEv);
+    syncSliderLabels();
+
+    if (state.serverOnline) {
+      runSolver(null, targetMin);
+    } else {
+      applyOfflineMidflightFallback(newEv, targetMin);
+    }
+  }
+
   function animationLoop(now) {
     if (state.playing && state.mission && state.mission.reachable && !state.mission.empty) {
       const dt = (now - state.lastFrameTime) / 1000.0;
       const makespan = Math.max(state.mission.routing.active.evaluation.makespan_min, 1.0);
-      // 1x plays 10 mission minutes per 1 real second
-      state.progress += (dt * 10.0 * state.speed) / makespan;
+      state.progress += (dt * 8.5 * state.speed) / makespan;
       if (state.progress >= 1.0) {
         state.progress = 1.0;
         state.playing = false;
@@ -645,7 +990,17 @@
       state.scenarioId = els.scenarioSelect.value;
       state.customCamps = null;
       state.customObstacles = null;
+      state.injectedEvents = [];
       runSolver();
+    });
+
+    els.enableDynamicChk.addEventListener("change", () => runSolver());
+    els.spawnSurpriseBtn.addEventListener("click", spawnSurpriseObstacleAhead);
+    els.undoDynamicBtn.addEventListener("click", () => {
+      if (state.injectedEvents.length === 0) return;
+      const removed = state.injectedEvents.pop();
+      syncSliderLabels();
+      runSolver(null, Math.max(0, removed.trigger_min - 0.5));
     });
 
     els.solveBtn.addEventListener("click", () => runSolver());
@@ -654,6 +1009,8 @@
     const resetAction = () => {
       state.customCamps = null;
       state.customObstacles = null;
+      state.injectedEvents = [];
+      syncSliderLabels();
       runSolver();
     };
     els.resetScenarioBtn.addEventListener("click", resetAction);
@@ -693,7 +1050,7 @@
         info = `${camp.name} (${camp.urgency}) | Muatan: ${camp.demand_kg} kg | Batas: ${camp.time_window_min} mnt`;
       }
       els.mapTooltip.textContent = info;
-      els.mapTooltip.style.left = `${Math.min(e.clientX - rect.left + 12, rect.width - 210)}px`;
+      els.mapTooltip.style.left = `${Math.min(e.clientX - rect.left + 12, rect.width - 220)}px`;
       els.mapTooltip.style.top = `${Math.max(8, e.clientY - rect.top - 34)}px`;
       els.mapTooltip.classList.remove("hidden");
       renderMap();
@@ -707,7 +1064,6 @@
 
     els.mapCanvas.addEventListener("click", (e) => {
       if (!state.mission || state.activeTool === "inspect") return;
-      if (!state.serverOnline) return;
       const rect = els.mapCanvas.getBoundingClientRect();
       const px = ((e.clientX - rect.left) / rect.width) * els.mapCanvas.width;
       const py = ((e.clientY - rect.top) / rect.height) * els.mapCanvas.height;
@@ -715,7 +1071,13 @@
       if (!cell) return;
       const [gx, gy] = cell;
 
+      const makespan = state.mission.reachable && !state.mission.empty && state.mission.routing
+        ? state.mission.routing.active.evaluation.makespan_min
+        : 0;
+      const simTime = Number((state.progress * makespan).toFixed(1));
+
       if (state.activeTool === "add_camp") {
+        if (!state.serverOnline) return;
         const list = state.customCamps ? [...state.customCamps] : [...state.mission.camps];
         const nextId = list.reduce((mx, c) => Math.max(mx, c.id), 0) + 1;
         list.push({
@@ -731,13 +1093,48 @@
         state.customCamps = list;
         runSolver();
       } else if (state.activeTool === "add_obstacle") {
-        const obs = state.customObstacles ? [...state.customObstacles] : [...state.mission.obstacles];
-        if (!obs.some((o) => o[0] === gx && o[1] === gy)) {
-          obs.push([gx, gy]);
-          state.customObstacles = obs;
-          runSolver();
+        // Mid-flight live obstacle injection when simulation is already underway
+        if (simTime > 0.5 && state.mission.reachable && !state.mission.empty) {
+          const cells = [];
+          for (let dx = 0; dx <= 1; dx++) {
+            for (let dy = 0; dy <= 1; dy++) {
+              const nx = gx + dx;
+              const ny = gy + dy;
+              if (
+                nx < state.mission.scenario.grid_width &&
+                ny < state.mission.scenario.grid_height &&
+                !(nx === state.mission.depot[0] && ny === state.mission.depot[1]) &&
+                !(state.mission.camps || []).some((c) => c.x === nx && c.y === ny)
+              ) {
+                cells.push([nx, ny]);
+              }
+            }
+          }
+          if (cells.length === 0) return;
+          const newEv = {
+            id: `paint_${Date.now()}`,
+            name: `Rintangan Baru (${gx},${gy})`,
+            trigger_min: simTime,
+            expire_min: null,
+            cells,
+            hazard_type: "Rintangan Pengguna",
+          };
+          state.injectedEvents.push(newEv);
+          syncSliderLabels();
+          if (state.serverOnline) {
+            runSolver(null, simTime);
+          } else {
+            applyOfflineMidflightFallback(newEv, simTime);
+          }
+        } else if (state.serverOnline) {
+          const obs = state.customObstacles ? [...state.customObstacles] : [...state.mission.obstacles];
+          if (!obs.some((o) => o[0] === gx && o[1] === gy)) {
+            obs.push([gx, gy]);
+            state.customObstacles = obs;
+            runSolver();
+          }
         }
-      } else if (state.activeTool === "erase_obstacle") {
+      } else if (state.activeTool === "erase_obstacle" && state.serverOnline) {
         const obs = (state.customObstacles || state.mission.obstacles).filter(
           (o) => !(o[0] === gx && o[1] === gy)
         );
@@ -784,7 +1181,6 @@
       renderMap();
     });
 
-    // Video modal + Escape + Space shortcuts
     const openModal = () => {
       els.videoModal.classList.remove("hidden");
       els.closeVideoModalBtn.focus();

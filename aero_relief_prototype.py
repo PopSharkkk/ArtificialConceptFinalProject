@@ -104,6 +104,12 @@ def run_cli_demo() -> None:
             f"{ds['total_time_min']:>5.2f} mnt | Reload: {ds['reloads']}x | {route_str}"
         )
 
+    replan_log = mission.get("dynamic", {}).get("replan_log", [])
+    if replan_log:
+        print("\n--- Log Adaptasi Rintangan Dinamis (Mid-Flight A* Re-planning) ---")
+        for item in replan_log:
+            print(f"  * {item['summary']}")
+
 
 if __name__ == "__main__":
     run_cli_demo()

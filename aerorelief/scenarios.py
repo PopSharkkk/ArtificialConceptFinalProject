@@ -1,7 +1,7 @@
-"""Predefined Indonesian post-disaster scenarios for AeroRelief."""
+"""Predefined Indonesian post-disaster scenarios with static & dynamic obstacles."""
 
 from typing import Dict, List
-from .models import Camp, DroneSpec, HazardZone, Hill, Scenario
+from .models import Camp, DroneSpec, DynamicHazardEvent, HazardZone, Hill, Scenario
 
 DRONE_COLORS = ["#1D5BD6", "#B86B00", "#0F7B58", "#B4234E"]
 DRONE_CALLSIGNS = [
@@ -40,8 +40,8 @@ SCENARIOS: Dict[str, Scenario] = {
         region="Kabupaten Lumajang, Jawa Timur",
         description=(
             "Jembatan Gladak Perak dan jalur darat terputus akibat aliran lahar dingin dan "
-            "awan panas guguran. Armada drone menyuplai obat pernapasan, oksigen portabel, dan "
-            "logistik medis dari Pos Komando Penanggal ke 8 posko pengungsian."
+            "awan panas guguran. Di tengah misi, awan abu vulkanik bergeser mengikuti angin "
+            "dan guguran lava susulan muncul mendadak sehingga drone beradaptasi secara real-time."
         ),
         grid_width=36,
         grid_height=26,
@@ -65,6 +65,41 @@ SCENARIOS: Dict[str, Scenario] = {
                 "Aliran Lahar Besuk Kobokan", 21, 25, 11, 15, "Bahaya Termal"
             ),
         ],
+        dynamic_events=[
+            DynamicHazardEvent(
+                id="semeru_ash_1",
+                name="Awan Abu Bergerak (Fase Barat)",
+                trigger_min=6.0,
+                expire_min=24.0,
+                x_min=2,
+                x_max=8,
+                y_min=12,
+                y_max=15,
+                hazard_type="Cuaca Bergerak",
+            ),
+            DynamicHazardEvent(
+                id="semeru_lava",
+                name="Guguran Lava Susulan Kobokan",
+                trigger_min=14.0,
+                expire_min=None,
+                x_min=22,
+                x_max=26,
+                y_min=3,
+                y_max=8,
+                hazard_type="Bencana Susulan",
+            ),
+            DynamicHazardEvent(
+                id="semeru_ash_2",
+                name="Awan Abu Bergeser (Fase Timur)",
+                trigger_min=24.0,
+                expire_min=None,
+                x_min=17,
+                x_max=21,
+                y_min=17,
+                y_max=19,
+                hazard_type="Cuaca Bergerak",
+            ),
+        ],
         hills=[
             Hill(14.0, 14.5, 5.5, 620.0),
             Hill(25.0, 18.0, 4.5, 360.0),
@@ -77,9 +112,9 @@ SCENARIOS: Dict[str, Scenario] = {
         title="Gempa Bumi & Longsor Cianjur",
         region="Kecamatan Cugenang, Jawa Barat",
         description=(
-            "Guncangan gempa memicu longsor di lereng Cugenang dan memutus akses ambulans "
-            "menuju desa-desa perbukitan. Drone mengirimkan darah donor, kit trauma ortopedi, "
-            "serta serum darurat dari RSUD Sayang."
+            "Guncangan gempa memicu longsor susulan di lereng Cugenang serta pergerakan sel badai "
+            "hujan di perbukitan. Drone mendeteksi penutupan koridor udara secara langsung dan "
+            "menghitung ulang lintasan A* dari udara."
         ),
         grid_width=36,
         grid_height=26,
@@ -102,6 +137,41 @@ SCENARIOS: Dict[str, Scenario] = {
                 "Kabut Tebal Punggung Bukit", 23, 26, 13, 18, "Visibilitas Nol"
             ),
         ],
+        dynamic_events=[
+            DynamicHazardEvent(
+                id="cianjur_storm_1",
+                name="Sel Badai Hujan Bergerak (Utara)",
+                trigger_min=2.5,
+                expire_min=22.0,
+                x_min=8,
+                x_max=11,
+                y_min=16,
+                y_max=19,
+                hazard_type="Cuaca Bergerak",
+            ),
+            DynamicHazardEvent(
+                id="cianjur_slide",
+                name="Longsor Susulan Jalur Selatan",
+                trigger_min=4.0,
+                expire_min=None,
+                x_min=14,
+                x_max=18,
+                y_min=4,
+                y_max=8,
+                hazard_type="Bencana Susulan",
+            ),
+            DynamicHazardEvent(
+                id="cianjur_storm_2",
+                name="Sel Badai Hujan Bergeser (Timur)",
+                trigger_min=22.0,
+                expire_min=None,
+                x_min=20,
+                x_max=24,
+                y_min=18,
+                y_max=21,
+                hazard_type="Cuaca Bergerak",
+            ),
+        ],
         hills=[
             Hill(15.0, 12.0, 5.0, 540.0),
             Hill(25.0, 15.0, 4.2, 410.0),
@@ -114,9 +184,9 @@ SCENARIOS: Dict[str, Scenario] = {
         title="Banjir Bandang Karanganyar (Demak)",
         region="Demak - Kudus, Jawa Tengah",
         description=(
-            "Tanggul sungai jebol merendam jalur Pantura dan memutus akses perahu di area arus "
-            "deras. Armada UAV mengantarkan antibiotik leptospirosis, insulin, dan logistik bayi "
-            "sambil menghindari koridor menara SUTET dan zona badai angin."
+            "Tanggul sungai jebol merendam jalur Pantura disertai pergerakan angin kencang dan "
+            "tiang transmisi roboh di tengah operasi. Armada UAV menyesuaikan rute terbang secara "
+            "adaptif saat rintangan baru terdeteksi."
         ),
         grid_width=36,
         grid_height=26,
@@ -142,6 +212,41 @@ SCENARIOS: Dict[str, Scenario] = {
             ),
             HazardZone(
                 "Area Tiang Pemancar", 26, 28, 8, 12, "Halangan Tinggi"
+            ),
+        ],
+        dynamic_events=[
+            DynamicHazardEvent(
+                id="demak_wind_1",
+                name="Angin Kencang Bergerak (Barat)",
+                trigger_min=2.5,
+                expire_min=20.0,
+                x_min=9,
+                x_max=13,
+                y_min=19,
+                y_max=22,
+                hazard_type="Cuaca Bergerak",
+            ),
+            DynamicHazardEvent(
+                id="demak_debris",
+                name="Tiang Transmisi Roboh Mendadak",
+                trigger_min=8.0,
+                expire_min=None,
+                x_min=18,
+                x_max=21,
+                y_min=5,
+                y_max=8,
+                hazard_type="Rintangan Baru",
+            ),
+            DynamicHazardEvent(
+                id="demak_wind_2",
+                name="Angin Kencang Bergeser (Tengah)",
+                trigger_min=14.0,
+                expire_min=None,
+                x_min=18,
+                x_max=21,
+                y_min=18,
+                y_max=22,
+                hazard_type="Cuaca Bergerak",
             ),
         ],
         hills=[
