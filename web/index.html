@@ -7,7 +7,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="/static/styles.css?v=4" />
+  <link rel="stylesheet" href="/static/styles.css?v=5" />
 </head>
 <body>
   <header class="topbar">
@@ -234,13 +234,6 @@
             <span>Menjalankan perhitungan jalur Python A* dan adaptasi rute armada...</span>
           </div>
 
-          <div id="dynamicAlertBanner" class="state-banner state-dynamic hidden" role="status" aria-live="polite">
-            <div>
-              <strong id="dynamicAlertTitle">Adaptasi Rintangan Dinamis Aktif</strong>
-              <p id="dynamicAlertText">Drone menyesuaikan lintasan terbang menghindari rintangan baru.</p>
-            </div>
-          </div>
-
           <div id="errorBanner" class="state-banner state-error hidden" role="alert">
             <div>
               <strong>Jalur Terblokir Zona Terlarang</strong>
@@ -251,6 +244,13 @@
 
           <div class="canvas-wrapper">
             <canvas id="mapCanvas" width="960" height="680" aria-label="Peta topografi interaktif rute drone dan rintangan dinamis"></canvas>
+
+            <div id="dynamicAlertBanner" class="state-banner state-dynamic hidden" role="status" aria-live="polite">
+              <div>
+                <strong id="dynamicAlertTitle">Adaptasi Rintangan Dinamis Aktif</strong>
+                <p id="dynamicAlertText">Drone menyesuaikan lintasan terbang menghindari rintangan baru.</p>
+              </div>
+            </div>
 
             <!-- Empty State Overlay -->
             <div id="emptyOverlay" class="empty-overlay hidden">
