@@ -335,6 +335,24 @@ class GridEnvironment25D:
         self.wildfires.append(fire)
         self._dirty = True
 
+    def clear_protected_entities(
+        self,
+        depots: List[Depot],
+        camps: List[DisasterCamp],
+        max_depot_elev: float,
+        max_camp_elev: float,
+    ) -> None:
+        """Clears static obstacles, active wildfire, and excessive elevation at depots and camps."""
+        for pos, cap in (
+            *((d.position, max_depot_elev) for d in depots),
+            *((c.position, max_camp_elev) for c in camps),
+        ):
+            self.static_obstacles[pos[1], pos[0]] = False
+            self.elevation_grid[pos[1], pos[0]] = min(self.elevation_grid[pos[1], pos[0]], cap)
+            for f in self.wildfires:
+                f.active_fire_cells.discard(pos)
+        self._dirty = True
+
     def _rebuild_caches(self) -> None:
         passable = (~self.static_obstacles) & (self.elevation_grid <= self.max_altitude_m)
         penalty = np.ones((self.height, self.width), dtype=np.float32)
@@ -507,10 +525,6 @@ def compute_route_matrix(
     total_cells = w * h
     passable, penalty, elev = env.ensure_caches()
     offsets = _build_neighbor_offsets(w, env.cell_size_m)
-
-    idx_to_keys: Dict[int, List[str]] = {}
-    for k, (px, py) in points.items():
-        idx_to_keys.setdefault(py * w + px, []).append(k)
 
     for src_key in keys:
         sx, sy = points[src_key]
@@ -726,7 +740,6 @@ class MultiDepotVRPTWGA:
             if best_drone_id is None:
                 best_drone_id = self.drones[0].id
 
-            d_obj = next(d for d in self.drones if d.id == best_drone_id)
             last_k = drone_last_key[best_drone_id]
             routes[best_drone_id].append(cid)
             drone_loads[best_drone_id] += camp.demand_kg
@@ -925,6 +938,7 @@ class AeroReliefSimulator:
             for c in camps
         }
         self.drones_cfg = {d.id: d for d in drones}
+        self._initial_paths = initial_paths
         self.rng = random.Random(seed)
         self.sim_time_min: float = 0.0
         self.events: List[str] = []
@@ -991,12 +1005,16 @@ class AeroReliefSimulator:
                 planned_full_path=full_path,
             )
 
-        # Mark unassigned camps: Pending if stayed at depot due to battery, else Unreachable if no route existed
+        # Mark unassigned camps: Pending only if a drone stayed at depot AND at least one depot can reach the camp
         assigned_all = {cid for ds in self.drone_states.values() for cid in ds.assigned_camp_ids}
         stayed_at_depot = any(ds.state == "Stay at Depot" for ds in self.drone_states.values())
         for cid, camp in self.camps.items():
             if cid not in assigned_all:
-                camp.status = "Pending" if stayed_at_depot else "Unreachable"
+                has_path = any(
+                    initial_paths.get((f"D{d.id}", f"C{cid}")) and initial_paths.get((f"C{cid}", f"D{d.id}"))
+                    for d in self.depots.values()
+                )
+                camp.status = "Pending" if (stayed_at_depot and has_path) else "Unreachable"
 
         self.events.append(f"[t=0.0m] Simulasi siap: {sum(1 for ds in self.drone_states.values() if ds.assigned_camp_ids)} drone aktif.")
 
@@ -1094,11 +1112,33 @@ class AeroReliefSimulator:
             f"[t={self.sim_time_min:.1f}m] Drone #{ds.drone_id} RE-ROUTING A* menuju {ds.current_target_key} menghindari Cuaca/Api!"
         )
 
+    def _resolve_path(
+        self,
+        src_key: str,
+        dst_key: str,
+        src_pos: Tuple[int, int],
+        cfg: DroneConfig,
+    ) -> Optional[List[Tuple[int, int]]]:
+        """Reuses cached initial path if still passable, else runs 2.5D A*."""
+        if src_pos == self._target_coords(src_key):
+            cached = self._initial_paths.get((src_key, dst_key))
+            if cached and all(self.env.is_passable(pt) for pt in cached):
+                return list(cached)
+        path, _, _ = astar_25d(
+            self.env,
+            src_pos,
+            self._target_coords(dst_key),
+            climb_penalty=cfg.climb_penalty_factor,
+            descent_penalty=cfg.descent_penalty_factor,
+        )
+        return path
+
     def _advance_target(self, ds: DroneRuntimeState, cfg: DroneConfig) -> None:
         if ds.current_target_key is None:
             return
-        if ds.current_target_key.startswith("C"):
-            cid = int(ds.current_target_key[1:])
+        cur_key = ds.current_target_key
+        if cur_key.startswith("C"):
+            cid = int(cur_key[1:])
             camp = self.camps[cid]
             camp.delivered_at_min = self.sim_time_min
             if self.sim_time_min <= camp.time_window_end_min:
@@ -1113,21 +1153,14 @@ class AeroReliefSimulator:
                 ds.assigned_camp_ids.remove(cid)
 
             home_k = f"D{ds.home_depot_id}"
-            home_pos = self._target_coords(home_k)
 
             if ds.assigned_camp_ids:
                 next_cid = ds.assigned_camp_ids[0]
                 next_key = f"C{next_cid}"
-                path_next, _, _ = astar_25d(
-                    self.env, ds.current_pos, self._target_coords(next_key),
-                    climb_penalty=cfg.climb_penalty_factor, descent_penalty=cfg.descent_penalty_factor
-                )
+                path_next = self._resolve_path(cur_key, next_key, ds.current_pos, cfg)
                 if path_next is not None:
                     wh_to_next = estimate_segment_energy_wh(path_next, self.env, cfg, ds.current_payload_kg)
-                    ret_after_next, _, _ = astar_25d(
-                        self.env, self._target_coords(next_key), home_pos,
-                        climb_penalty=cfg.climb_penalty_factor, descent_penalty=cfg.descent_penalty_factor
-                    )
+                    ret_after_next = self._resolve_path(next_key, home_k, self._target_coords(next_key), cfg)
                     after_load = max(0.0, ds.current_payload_kg - self.camps[next_cid].demand_kg)
                     wh_ret_after = estimate_segment_energy_wh(ret_after_next, self.env, cfg, after_load) if ret_after_next else float("inf")
 
@@ -1153,10 +1186,7 @@ class AeroReliefSimulator:
                 ds.assigned_camp_ids.clear()
 
             # Try returning to Depot; if estimated energy insufficient or blocked, stay at Posko
-            path_home, _, _ = astar_25d(
-                self.env, ds.current_pos, home_pos,
-                climb_penalty=cfg.climb_penalty_factor, descent_penalty=cfg.descent_penalty_factor
-            )
+            path_home = self._resolve_path(cur_key, home_k, ds.current_pos, cfg)
             wh_home = estimate_segment_energy_wh(path_home, self.env, cfg, ds.current_payload_kg) if path_home else float("inf")
             if path_home is None or wh_home > ds.remaining_battery_wh:
                 ds.current_target_key = None
@@ -1277,6 +1307,148 @@ class AeroReliefSimulator:
                 self._advance_target(ds, cfg)
 
 
+def _pick_separated_point(
+    rng: random.Random,
+    x_lo: int,
+    x_hi: int,
+    y_lo: int,
+    y_hi: int,
+    occupied_exact: Set[Tuple[int, int]],
+    constraints: List[Tuple[List[Tuple[int, int]], float]],
+    max_tries: int = 250,
+) -> Tuple[int, int]:
+    """Picks a grid point respecting minimum separation constraints with progressive relaxation."""
+    x_lo_c, x_hi_c = min(x_lo, x_hi), max(x_lo, x_hi)
+    y_lo_c, y_hi_c = min(y_lo, y_hi), max(y_lo, y_hi)
+
+    for scale in (1.0, 0.65, 0.35, 0.0):
+        for _ in range(max_tries):
+            x = rng.randint(x_lo_c, x_hi_c)
+            y = rng.randint(y_lo_c, y_hi_c)
+            if (x, y) in occupied_exact:
+                continue
+            if all(
+                math.hypot(x - px, y - py) >= min_d * scale
+                for pts, min_d in constraints
+                for px, py in pts
+            ):
+                return x, y
+
+    # Deterministic fallback if random sampling was exhausted on very small grids
+    for y in range(y_lo_c, y_hi_c + 1):
+        for x in range(x_lo_c, x_hi_c + 1):
+            if (x, y) not in occupied_exact:
+                return x, y
+    return x_lo_c, y_lo_c
+
+
+def generate_random_scenario_layout(
+    width: int = 50,
+    height: int = 50,
+    seed: Optional[int] = None,
+    num_depots: int = 2,
+    num_camps: int = 8,
+    storm_core_radius: Optional[float] = None,
+    storm_turb_radius: Optional[float] = None,
+) -> Dict[str, object]:
+    """Generates randomized, non-overlapping initial placements for depots, camps, storm, and wildfire."""
+    rng = random.Random(seed)
+    min_dim = min(width, height)
+    margin = max(1, min(3, int(round(min_dim * 0.06))))
+    x_lo, x_hi = margin, max(margin, width - 1 - margin)
+    y_lo, y_hi = margin, max(margin, height - 1 - margin)
+
+    occupied_exact: Set[Tuple[int, int]] = set()
+    depot_positions: List[Tuple[int, int]] = []
+    camp_positions: List[Tuple[int, int]] = []
+
+    depot_sep = max(4.0, min_dim * 0.35)
+    depots: List[Depot] = []
+    for i in range(num_depots):
+        pos = _pick_separated_point(
+            rng, x_lo, x_hi, y_lo, y_hi, occupied_exact, [(depot_positions, depot_sep)]
+        )
+        occupied_exact.add(pos)
+        depot_positions.append(pos)
+        depots.append(Depot(id=i + 1, name=f"Depot {i + 1}", position=pos))
+
+    camp_profiles = [
+        (2.5, "CRITICAL", 14.0),
+        (2.0, "HIGH", 22.0),
+        (2.5, "CRITICAL", 16.0),
+        (1.5, "NORMAL", 30.0),
+        (2.0, "HIGH", 20.0),
+        (2.0, "HIGH", 24.0),
+        (1.5, "NORMAL", 28.0),
+        (2.5, "CRITICAL", 18.0),
+    ]
+    camp_depot_sep = max(3.0, min_dim * 0.14)
+    camp_camp_sep = max(2.5, min_dim * 0.11)
+    camps: List[DisasterCamp] = []
+    for i in range(num_camps):
+        pos = _pick_separated_point(
+            rng,
+            x_lo,
+            x_hi,
+            y_lo,
+            y_hi,
+            occupied_exact,
+            [(depot_positions, camp_depot_sep), (camp_positions, camp_camp_sep)],
+        )
+        occupied_exact.add(pos)
+        camp_positions.append(pos)
+        demand_kg, urgency, tw_min = camp_profiles[i % len(camp_profiles)]
+        suffix = " (Kritis)" if urgency == "CRITICAL" else ""
+        camps.append(
+            DisasterCamp(
+                id=i + 1,
+                name=f"Posko {i + 1}{suffix}",
+                position=pos,
+                demand_kg=demand_kg,
+                urgency=urgency,
+                time_window_end_min=tw_min,
+            )
+        )
+
+    core_r = storm_core_radius if storm_core_radius is not None else max(2.0, width * 0.055)
+    turb_r = storm_turb_radius if storm_turb_radius is not None else max(4.0, width * 0.11)
+    s_margin = min(max(2, int(math.ceil(core_r)) + 1), max(2, min_dim // 3))
+    sx_lo, sx_hi = s_margin, max(s_margin, width - 1 - s_margin)
+    sy_lo, sy_hi = s_margin, max(s_margin, height - 1 - s_margin)
+
+    all_entities = depot_positions + camp_positions
+    storm_pos = _pick_separated_point(
+        rng,
+        sx_lo,
+        sx_hi,
+        sy_lo,
+        sy_hi,
+        occupied_exact,
+        [(all_entities, max(core_r + 2.0, turb_r * 0.8))],
+    )
+
+    f_margin = min(max(2, int(round(min_dim * 0.06))), max(2, min_dim // 3))
+    fx_lo, fx_hi = f_margin, max(f_margin, width - 1 - f_margin)
+    fy_lo, fy_hi = f_margin, max(f_margin, height - 1 - f_margin)
+    # Wildfire ignites a 3x3 zone around fire_center; keep clear of depots/camps and storm core
+    fire_pos = _pick_separated_point(
+        rng,
+        fx_lo,
+        fx_hi,
+        fy_lo,
+        fy_hi,
+        occupied_exact | {storm_pos},
+        [(all_entities, 3.5), ([storm_pos], core_r + 3.0)],
+    )
+
+    return {
+        "depots": depots,
+        "camps": camps,
+        "storm_center": (float(storm_pos[0]), float(storm_pos[1])),
+        "fire_center": fire_pos,
+    }
+
+
 def create_default_scenario(
     width: int = 50,
     height: int = 50,
@@ -1284,8 +1456,9 @@ def create_default_scenario(
     terrain_seed: int = 42,
     num_drones: int = 3,
     wind_vector: Tuple[float, float, float] = (1.0, 0.4, 9.0),
+    layout_seed: Optional[int] = None,
 ) -> Tuple[GridEnvironment25D, List[Depot], List[DisasterCamp], List[DroneConfig]]:
-    """Builds a ready-to-run PRD scenario scalable from 10x10 up to 100x100."""
+    """Builds a ready-to-run PRD scenario scalable from 10x10 up to 100x100 with randomized initial placement."""
     env = GridEnvironment25D(
         width=width,
         height=height,
@@ -1295,21 +1468,29 @@ def create_default_scenario(
     )
     env.set_elevation_perlin(seed=terrain_seed, max_terrain_m=160.0)
 
-    def sx(frac: float) -> int:
-        return max(1, min(width - 2, int(round(frac * (width - 1)))))
-
-    def sy(frac: float) -> int:
-        return max(1, min(height - 2, int(round(frac * (height - 1)))))
+    core_r = max(2.0, width * 0.055)
+    turb_r = max(4.0, width * 0.11)
+    layout = generate_random_scenario_layout(
+        width=width,
+        height=height,
+        seed=layout_seed,
+        storm_core_radius=core_r,
+        storm_turb_radius=turb_r,
+    )
+    depots: List[Depot] = layout["depots"]  # type: ignore[assignment]
+    camps: List[DisasterCamp] = layout["camps"]  # type: ignore[assignment]
+    storm_center: Tuple[float, float] = layout["storm_center"]  # type: ignore[assignment]
+    fx, fy = layout["fire_center"]  # type: ignore[misc]
 
     # Static No-Fly Zone disabled per user requirement
 
     # Moving Bad Weather Storm Cell
     storm = WeatherStormCell(
         id=1,
-        name="Badai Sektor Barat",
-        center=(float(sx(0.22)), float(sy(0.32))),
-        core_radius=max(2.0, width * 0.055),
-        turbulence_radius=max(4.0, width * 0.11),
+        name="Badai Utama",
+        center=storm_center,
+        core_radius=core_r,
+        turbulence_radius=turb_r,
         velocity=(wind_vector[0] * 0.45, wind_vector[1] * 0.45),
         penalty_multiplier=1.85,
         active=True,
@@ -1319,7 +1500,7 @@ def create_default_scenario(
     # Moving, area-limited Wildfire (Karhutla)
     fire = WildfireHazard(
         id=1,
-        name="Karhutla Zona Timur",
+        name="Karhutla Awal",
         base_spread_prob=0.28,
         wind_bias=0.50,
         slope_bias=0.30,
@@ -1330,34 +1511,11 @@ def create_default_scenario(
         move_dir_x=1.0 if wind_vector[0] >= 0 else -1.0,
         active=True,
     )
-    fx, fy = sx(0.64), sy(0.46)
     fire.ignite_zone(fx - 1, fx + 1, fy - 1, fy + 1, width, height)
     env.add_wildfire(fire)
 
-    depots = [
-        Depot(id=1, name="Depot Utama Barat", position=(sx(0.08), sy(0.10))),
-        Depot(id=2, name="Depot Timur", position=(sx(0.90), sy(0.14))),
-    ]
-
-    camps = [
-        DisasterCamp(id=1, name="Posko 1 (Kritis)", position=(sx(0.18), sy(0.76)), demand_kg=2.5, urgency="CRITICAL", time_window_end_min=14.0),
-        DisasterCamp(id=2, name="Posko 2", position=(sx(0.42), sy(0.84)), demand_kg=2.0, urgency="HIGH", time_window_end_min=22.0),
-        DisasterCamp(id=3, name="Posko 3 (Kritis)", position=(sx(0.82), sy(0.82)), demand_kg=2.5, urgency="CRITICAL", time_window_end_min=16.0),
-        DisasterCamp(id=4, name="Posko 4", position=(sx(0.14), sy(0.44)), demand_kg=1.5, urgency="NORMAL", time_window_end_min=30.0),
-        DisasterCamp(id=5, name="Posko 5", position=(sx(0.56), sy(0.18)), demand_kg=2.0, urgency="HIGH", time_window_end_min=20.0),
-        DisasterCamp(id=6, name="Posko 6", position=(sx(0.78), sy(0.56)), demand_kg=2.0, urgency="HIGH", time_window_end_min=24.0),
-        DisasterCamp(id=7, name="Posko 7", position=(sx(0.32), sy(0.24)), demand_kg=1.5, urgency="NORMAL", time_window_end_min=28.0),
-        DisasterCamp(id=8, name="Posko 8 (Kritis)", position=(sx(0.62), sy(0.72)), demand_kg=2.5, urgency="CRITICAL", time_window_end_min=18.0),
-    ]
-
     # Ensure depots and camps are never blocked by static obstacles or initial fire
-    for d in depots:
-        env.static_obstacles[d.position[1], d.position[0]] = False
-        env.elevation_grid[d.position[1], d.position[0]] = min(env.elevation_grid[d.position[1], d.position[0]], 40.0)
-    for c in camps:
-        env.static_obstacles[c.position[1], c.position[0]] = False
-        env.elevation_grid[c.position[1], c.position[0]] = min(env.elevation_grid[c.position[1], c.position[0]], 120.0)
-        fire.active_fire_cells.discard(c.position)
+    env.clear_protected_entities(depots, camps, max_depot_elev=40.0, max_camp_elev=120.0)
 
     drones = [
         DroneConfig(

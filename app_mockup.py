@@ -9,13 +9,12 @@ Implements PRD.md:
 
 from __future__ import annotations
 
+import base64
 import math
 import random
 import time
 from typing import Dict, List, Tuple
 
-import matplotlib.patches as patches
-import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import streamlit as st
@@ -30,24 +29,125 @@ from aerorelief_engine import (
     WeatherStormCell,
     WildfireHazard,
     compute_route_matrix,
+    generate_random_scenario_layout,
 )
 
 st.set_page_config(
-    page_title="AeroRelief 2.5D Simulator — PRD Mockup",
+    page_title="AeroRelief 2.5D | Emergency Drone Routing",
     layout="wide",
-    page_icon="🚁",
+    initial_sidebar_state="expanded",
 )
 
-DRONE_COLORS = ["#1d4ed8", "#059669", "#7c3aed", "#db2777", "#0891b2", "#ca8a04"]
+# Calm, accessible operational palette (neutral slate base + cobalt accent + semantic alerts)
+st.markdown(
+    """
+    <style>
+    .block-container {
+        padding-top: 1.5rem;
+        padding-bottom: 2rem;
+    }
+    .ar-header {
+        margin-bottom: 0.75rem;
+        padding-bottom: 0.75rem;
+        border-bottom: 1px solid #E2E8F0;
+    }
+    .ar-title {
+        font-size: 1.65rem;
+        font-weight: 700;
+        color: #0F172A;
+        letter-spacing: -0.02em;
+        margin: 0;
+        line-height: 1.25;
+    }
+    .ar-subtitle {
+        font-size: 0.92rem;
+        color: #475569;
+        margin: 0.25rem 0 0 0;
+    }
+    .ar-section-label {
+        font-size: 0.78rem;
+        font-weight: 600;
+        color: #475569;
+        text-transform: uppercase;
+        letter-spacing: 0.04em;
+        margin: 0.25rem 0 0.4rem 0;
+    }
+    .ar-drone-card {
+        background: #FFFFFF;
+        border: 1px solid #E2E8F0;
+        border-radius: 8px;
+        padding: 0.75rem 0.9rem;
+        margin-bottom: 0.55rem;
+    }
+    .ar-drone-head {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        gap: 0.5rem;
+        margin-bottom: 0.35rem;
+        font-variant-numeric: tabular-nums;
+    }
+    .ar-drone-name {
+        font-weight: 600;
+        color: #0F172A;
+        font-size: 0.92rem;
+    }
+    .ar-drone-meta {
+        font-size: 0.82rem;
+        color: #475569;
+        font-variant-numeric: tabular-nums;
+    }
+    .ar-status-pill {
+        display: inline-block;
+        padding: 0.14rem 0.5rem;
+        border-radius: 4px;
+        font-size: 0.75rem;
+        font-weight: 600;
+    }
+    .ar-pill-active { background: #EFF6FF; color: #1D4ED8; border: 1px solid #BFDBFE; }
+    .ar-pill-ok     { background: #F0FDF4; color: #166534; border: 1px solid #BBF7D0; }
+    .ar-pill-warn   { background: #FFFBEB; color: #92400E; border: 1px solid #FDE68A; }
+    .ar-pill-danger { background: #FEF2F2; color: #B91C1C; border: 1px solid #FECACA; }
+    .ar-pill-muted  { background: #F8FAFC; color: #475569; border: 1px solid #CBD5E1; }
+
+    /* Accessible tap target & keyboard focus ring */
+    .stButton > button {
+        min-height: 44px;
+        border-radius: 6px;
+        font-weight: 500;
+        cursor: pointer;
+    }
+    .stButton > button:focus-visible,
+    button:focus-visible,
+    input:focus-visible,
+    select:focus-visible {
+        outline: 2px solid #1D4ED8 !important;
+        outline-offset: 2px !important;
+    }
+    div[data-testid="stMetricValue"] {
+        font-variant-numeric: tabular-nums;
+    }
+    @media (prefers-reduced-motion: reduce) {
+        *, *::before, *::after {
+            transition-duration: 0.01ms !important;
+            animation-duration: 0.01ms !important;
+        }
+    }
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
+
+DRONE_COLORS = ["#1D4ED8", "#0F766E", "#7C3AED", "#BE185D", "#B45309", "#0369A1"]
 URGENCY_COLORS = {
-    "CRITICAL": "#dc2626",
-    "HIGH": "#ea580c",
-    "NORMAL": "#2563eb",
+    "CRITICAL": "#DC2626",
+    "HIGH": "#B45309",
+    "NORMAL": "#1D4ED8",
 }
 
 
-@st.cache_data(show_spinner="Menghitung matriks jalur A* 2.5D & optimasi armada GA...")
-def solve_initial_plan(
+@st.cache_data(show_spinner=False)
+def compute_cached_route_matrix(
     width: int,
     height: int,
     cell_size_m: float,
@@ -61,16 +161,7 @@ def solve_initial_plan(
     nfz_tuple: Tuple[Tuple[int, int, int, int], ...],
     storm_cfg: Tuple[bool, float, float, float, float, float],
     fire_cfg: Tuple[bool, int, int, float, int, float],
-    num_drones: int,
-    max_battery_wh: float,
-    max_payload_kg: float,
-    speed_mps: float,
     climb_penalty: float,
-    pop_size: int,
-    generations: int,
-    alpha: float,
-    beta: float,
-    gamma: float,
 ):
     env = GridEnvironment25D(
         width=width,
@@ -125,15 +216,51 @@ def solve_initial_plan(
         for c in camps_tuple
     ]
 
-    for d in depots:
-        env.static_obstacles[d.position[1], d.position[0]] = False
-        env.elevation_grid[d.position[1], d.position[0]] = min(env.elevation_grid[d.position[1], d.position[0]], max_altitude_m - 20.0)
-    for c in camps:
-        env.static_obstacles[c.position[1], c.position[0]] = False
-        env.elevation_grid[c.position[1], c.position[0]] = min(env.elevation_grid[c.position[1], c.position[0]], max_altitude_m - 10.0)
-        for f in env.wildfires:
-            f.active_fire_cells.discard(c.position)
+    env.clear_protected_entities(
+        depots,
+        camps,
+        max_depot_elev=max_altitude_m - 20.0,
+        max_camp_elev=max_altitude_m - 10.0,
+    )
 
+    points: Dict[str, Tuple[int, int]] = {f"D{d.id}": d.position for d in depots}
+    for c in camps:
+        points[f"C{c.id}"] = c.position
+
+    t0 = time.perf_counter()
+    cost_matrix, dist_matrix, paths = compute_route_matrix(
+        env, points, climb_penalty=climb_penalty, descent_penalty=0.4
+    )
+    t_matrix_ms = (time.perf_counter() - t0) * 1000.0
+
+    return {
+        "env": env,
+        "depots": depots,
+        "camps": camps,
+        "cost_matrix": cost_matrix,
+        "dist_matrix": dist_matrix,
+        "paths": paths,
+        "t_matrix_ms": t_matrix_ms,
+    }
+
+
+@st.cache_data(show_spinner=False)
+def solve_cached_ga_plan(
+    env_key: tuple,
+    _route_data: dict,
+    num_drones: int,
+    max_battery_wh: float,
+    max_payload_kg: float,
+    speed_mps: float,
+    climb_penalty: float,
+    pop_size: int,
+    generations: int,
+    alpha: float,
+    beta: float,
+    gamma: float,
+):
+    del env_key  # Included in cache key so GA invalidates when route_data changes
+    depots = _route_data["depots"]
     drones = [
         DroneConfig(
             id=i + 1,
@@ -147,25 +274,15 @@ def solve_initial_plan(
         for i in range(num_drones)
     ]
 
-    points: Dict[str, Tuple[int, int]] = {f"D{d.id}": d.position for d in depots}
-    for c in camps:
-        points[f"C{c.id}"] = c.position
-
-    t0 = time.perf_counter()
-    cost_matrix, dist_matrix, paths = compute_route_matrix(
-        env, points, climb_penalty=climb_penalty, descent_penalty=0.4
-    )
-    t_matrix_ms = (time.perf_counter() - t0) * 1000.0
-
     t1 = time.perf_counter()
     ga = MultiDepotVRPTWGA(
-        env=env,
+        env=_route_data["env"],
         depots=depots,
-        camps=camps,
+        camps=_route_data["camps"],
         drones=drones,
-        cost_matrix=cost_matrix,
-        dist_matrix=dist_matrix,
-        paths=paths,
+        cost_matrix=_route_data["cost_matrix"],
+        dist_matrix=_route_data["dist_matrix"],
+        paths=_route_data["paths"],
         pop_size=pop_size,
         generations=generations,
         alpha=alpha,
@@ -176,14 +293,9 @@ def solve_initial_plan(
     t_ga_ms = (time.perf_counter() - t1) * 1000.0
 
     return {
-        "env": env,
-        "depots": depots,
-        "camps": camps,
         "drones": drones,
         "routes": routes,
-        "paths": paths,
         "ga_metrics": ga_metrics,
-        "t_matrix_ms": t_matrix_ms,
         "t_ga_ms": t_ga_ms,
     }
 
@@ -243,215 +355,575 @@ def clone_simulator_from_plan(plan: dict) -> AeroReliefSimulator:
     )
 
 
-def render_map_figure(sim: AeroReliefSimulator) -> plt.Figure:
+_MAP_CANVAS_HTML = """
+<div class="ar-map-shell">
+  <canvas id="ar-map" width="760" height="670"></canvas>
+</div>
+"""
+
+_MAP_CANVAS_CSS = """
+.ar-map-shell {
+  width: 100%;
+  background: #FFFFFF;
+  border: 1px solid #E2E8F0;
+  border-radius: 8px;
+  padding: 6px;
+  box-sizing: border-box;
+}
+#ar-map {
+  display: block;
+  width: 100%;
+  height: auto;
+  aspect-ratio: 760 / 670;
+}
+"""
+
+_MAP_CANVAS_JS = """
+function elevColor(elevM, maxElev) {
+  const t = Math.max(0, Math.min(1, elevM / Math.max(160, maxElev)));
+  const stops = [
+    [248, 250, 252],
+    [232, 239, 234],
+    [200, 215, 205],
+    [159, 181, 167],
+  ];
+  const scaled = t * (stops.length - 1);
+  const idx = Math.min(stops.length - 2, Math.floor(scaled));
+  const f = scaled - idx;
+  const a = stops[idx], b = stops[idx + 1];
+  const r = Math.round(a[0] + (b[0] - a[0]) * f);
+  const g = Math.round(a[1] + (b[1] - a[1]) * f);
+  const bl = Math.round(a[2] + (b[2] - a[2]) * f);
+  return `rgb(${r},${g},${bl})`;
+}
+
+function drawRoundedRect(ctx, x, y, w, h, r) {
+  ctx.beginPath();
+  ctx.moveTo(x + r, y);
+  ctx.lineTo(x + w - r, y);
+  ctx.quadraticCurveTo(x + w, y, x + w, y + r);
+  ctx.lineTo(x + w, y + h - r);
+  ctx.quadraticCurveTo(x + w, y + h, x + w - r, y + h);
+  ctx.lineTo(x + r, y + h);
+  ctx.quadraticCurveTo(x, y + h, x, y + h - r);
+  ctx.lineTo(x, y + r);
+  ctx.quadraticCurveTo(x, y, x + r, y);
+  ctx.closePath();
+}
+
+function drawLabel(ctx, text, cx, cy, bg, border, fg) {
+  ctx.font = "600 10.5px system-ui, -apple-system, sans-serif";
+  const padX = 5;
+  const tw = ctx.measureText(text).width;
+  const bw = tw + padX * 2;
+  const bh = 16;
+  const bx = cx - bw / 2;
+  const by = cy - bh / 2;
+  drawRoundedRect(ctx, bx, by, bw, bh, 4);
+  ctx.fillStyle = bg;
+  ctx.fill();
+  if (border) {
+    ctx.strokeStyle = border;
+    ctx.lineWidth = 1;
+    ctx.stroke();
+  }
+  ctx.fillStyle = fg;
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  ctx.fillText(text, cx, cy + 0.5);
+}
+
+function drawArrow(ctx, x1, y1, x2, y2, color, lw) {
+  const dx = x2 - x1, dy = y2 - y1;
+  const ang = Math.atan2(dy, dx);
+  const head = 6;
+  ctx.strokeStyle = color;
+  ctx.fillStyle = color;
+  ctx.lineWidth = lw;
+  ctx.beginPath();
+  ctx.moveTo(x1, y1);
+  ctx.lineTo(x2, y2);
+  ctx.stroke();
+  ctx.beginPath();
+  ctx.moveTo(x2, y2);
+  ctx.lineTo(x2 - head * Math.cos(ang - Math.PI / 6), y2 - head * Math.sin(ang - Math.PI / 6));
+  ctx.lineTo(x2 - head * Math.cos(ang + Math.PI / 6), y2 - head * Math.sin(ang + Math.PI / 6));
+  ctx.closePath();
+  ctx.fill();
+}
+
+function buildTerrainLayer(data, w, h, dpr, plot) {
+  const off = document.createElement("canvas");
+  off.width = Math.round(w * dpr);
+  off.height = Math.round(h * dpr);
+  const ctx = off.getContext("2d");
+  ctx.scale(dpr, dpr);
+
+  ctx.fillStyle = "#FFFFFF";
+  ctx.fillRect(0, 0, w, h);
+
+  const gw = data.width, gh = data.height;
+  const cellW = plot.w / gw;
+  const cellH = plot.h / gh;
+  const binStr = atob(data.elev_b64);
+
+  for (let gy = 0; gy < gh; gy++) {
+    const py = plot.y + (gh - 1 - gy) * cellH;
+    for (let gx = 0; gx < gw; gx++) {
+      const elevM = binStr.charCodeAt(gy * gw + gx) * 10;
+      const px = plot.x + gx * cellW;
+      ctx.fillStyle = elevColor(elevM, data.max_elev);
+      ctx.fillRect(px, py, Math.ceil(cellW), Math.ceil(cellH));
+      if (elevM > data.max_alt) {
+        ctx.fillStyle = "rgba(120, 113, 108, 0.72)";
+        ctx.beginPath();
+        ctx.moveTo(px + cellW * 0.5, py + cellH * 0.18);
+        ctx.lineTo(px + cellW * 0.82, py + cellH * 0.82);
+        ctx.lineTo(px + cellW * 0.18, py + cellH * 0.82);
+        ctx.closePath();
+        ctx.fill();
+      }
+    }
+  }
+
+  // Subtle grid lines every ~5 cells
+  const step = gw >= 70 ? 10 : 5;
+  ctx.strokeStyle = "rgba(148, 163, 184, 0.28)";
+  ctx.lineWidth = 0.8;
+  for (let gx = 0; gx <= gw; gx += step) {
+    const px = plot.x + gx * cellW;
+    ctx.beginPath();
+    ctx.moveTo(px, plot.y);
+    ctx.lineTo(px, plot.y + plot.h);
+    ctx.stroke();
+  }
+  for (let gy = 0; gy <= gh; gy += step) {
+    const py = plot.y + (gh - gy) * cellH;
+    ctx.beginPath();
+    ctx.moveTo(plot.x, py);
+    ctx.lineTo(plot.x + plot.w, py);
+    ctx.stroke();
+  }
+
+  // Plot frame & axis labels
+  ctx.strokeStyle = "#CBD5E1";
+  ctx.lineWidth = 1;
+  ctx.strokeRect(plot.x, plot.y, plot.w, plot.h);
+
+  ctx.fillStyle = "#475569";
+  ctx.font = "500 10.5px system-ui, -apple-system, sans-serif";
+  ctx.textAlign = "center";
+  ctx.textBaseline = "top";
+  for (let gx = 0; gx < gw; gx += step * 2) {
+    const cx = plot.x + (gx + 0.5) * cellW;
+    ctx.fillText(String(gx), cx, plot.y + plot.h + 5);
+  }
+  ctx.textAlign = "right";
+  ctx.textBaseline = "middle";
+  for (let gy = 0; gy < gh; gy += step * 2) {
+    const cy = plot.y + (gh - 0.5 - gy) * cellH;
+    ctx.fillText(String(gy), plot.x - 6, cy);
+  }
+
+  ctx.fillStyle = "#334155";
+  ctx.font = "600 11px system-ui, -apple-system, sans-serif";
+  ctx.textAlign = "center";
+  ctx.textBaseline = "top";
+  const kmW = ((gw * data.cell_size_m) / 1000).toFixed(1);
+  const kmH = ((gh * data.cell_size_m) / 1000).toFixed(1);
+  ctx.fillText(`Koordinat X (${Math.round(data.cell_size_m)} m/petak, lebar ${kmW} km)`, plot.x + plot.w / 2, plot.y + plot.h + 22);
+
+  ctx.save();
+  ctx.translate(16, plot.y + plot.h / 2);
+  ctx.rotate(-Math.PI / 2);
+  ctx.textAlign = "center";
+  ctx.textBaseline = "top";
+  ctx.fillText(`Koordinat Y (tinggi ${kmH} km)`, 0, 0);
+  ctx.restore();
+
+  // Elevation colorbar
+  const cbX = plot.x + plot.w + 14;
+  const cbW = 12;
+  for (let i = 0; i < 60; i++) {
+    const frac = 1 - i / 59;
+    ctx.fillStyle = elevColor(frac * Math.max(160, data.max_elev), data.max_elev);
+    ctx.fillRect(cbX, plot.y + (i / 60) * plot.h, cbW, Math.ceil(plot.h / 60) + 1);
+  }
+  ctx.strokeStyle = "#CBD5E1";
+  ctx.strokeRect(cbX, plot.y, cbW, plot.h);
+  ctx.fillStyle = "#475569";
+  ctx.font = "500 10px system-ui, -apple-system, sans-serif";
+  ctx.textAlign = "left";
+  ctx.textBaseline = "middle";
+  ctx.fillText(`${Math.round(Math.max(160, data.max_elev))}m`, cbX + cbW + 4, plot.y + 4);
+  ctx.fillText("0m", cbX + cbW + 4, plot.y + plot.h - 4);
+
+  return off;
+}
+
+export default function(component) {
+  const { parentElement, data } = component;
+  const canvas = parentElement.querySelector("#ar-map");
+  if (!canvas || !data) return;
+
+  const w = 760, h = 670;
+  const dpr = Math.min(2, window.devicePixelRatio || 1);
+  const targetW = Math.round(w * dpr);
+  const targetH = Math.round(h * dpr);
+  if (canvas.width !== targetW || canvas.height !== targetH) {
+    canvas.width = targetW;
+    canvas.height = targetH;
+  }
+
+  const plot = { x: 52, y: 34, w: 636, h: 552 };
+  const gw = data.width, gh = data.height;
+  const cellW = plot.w / gw;
+  const cellH = plot.h / gh;
+  const toX = (gx) => plot.x + (gx + 0.5) * cellW;
+  const toY = (gy) => plot.y + (gh - 0.5 - gy) * cellH;
+
+  const cache = canvas._arCache || (canvas._arCache = {
+    terrainKey: null,
+    terrainCanvas: null,
+    prevDrones: {},
+    prevStorms: {},
+    rafId: null,
+  });
+
+  if (cache.rafId) {
+    cancelAnimationFrame(cache.rafId);
+    cache.rafId = null;
+  }
+
+  if (cache.terrainKey !== data.terrain_key || !cache.terrainCanvas) {
+    cache.terrainCanvas = buildTerrainLayer(data, w, h, dpr, plot);
+    cache.terrainKey = data.terrain_key;
+    cache.prevDrones = {};
+    cache.prevStorms = {};
+  }
+
+  const startDrones = {};
+  for (const d of data.drones) {
+    startDrones[d.id] = (!data.snap && cache.prevDrones[d.id]) ? cache.prevDrones[d.id] : d.pos;
+  }
+  const startStorms = {};
+  for (const s of data.storms) {
+    startStorms[s.id] = (!data.snap && cache.prevStorms[s.id]) ? cache.prevStorms[s.id] : s.center;
+  }
+
+  const reducedMotion = window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  const duration = (data.playing && !data.snap && !reducedMotion) ? Math.max(80, data.interp_ms || 380) : 0;
+  const tStart = performance.now();
+
+  const renderFrame = (now) => {
+    const p = duration > 0 ? Math.min(1, (now - tStart) / duration) : 1;
+    const ctx = canvas.getContext("2d");
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.drawImage(cache.terrainCanvas, 0, 0, w, h);
+
+    // Header bar
+    ctx.fillStyle = "#0F172A";
+    ctx.font = "700 13px system-ui, -apple-system, sans-serif";
+    ctx.textAlign = "left";
+    ctx.textBaseline = "middle";
+    ctx.fillText(`Peta Operasi 2.5D | t = ${data.sim_time_min.toFixed(2)} menit`, plot.x, 17);
+
+    // Burned & active fire cells
+    ctx.fillStyle = "rgba(148, 163, 184, 0.55)";
+    for (const [fx, fy] of data.burned) {
+      ctx.fillRect(plot.x + fx * cellW + 0.5, plot.y + (gh - 1 - fy) * cellH + 0.5, Math.max(3, cellW - 1), Math.max(3, cellH - 1));
+    }
+    ctx.fillStyle = "rgba(234, 88, 12, 0.90)";
+    ctx.strokeStyle = "#9A3412";
+    ctx.lineWidth = 1;
+    for (const [fx, fy] of data.fires) {
+      const rx = plot.x + fx * cellW + 0.5;
+      const ry = plot.y + (gh - 1 - fy) * cellH + 0.5;
+      const rw = Math.max(4, cellW - 1);
+      const rh = Math.max(4, cellH - 1);
+      ctx.fillRect(rx, ry, rw, rh);
+      ctx.strokeRect(rx, ry, rw, rh);
+    }
+
+    // Storms (interpolated)
+    for (const s of data.storms) {
+      const s0 = startStorms[s.id] || s.center;
+      const sx = s0[0] + (s.center[0] - s0[0]) * p;
+      const sy = s0[1] + (s.center[1] - s0[1]) * p;
+      cache.prevStorms[s.id] = [sx, sy];
+      const px = toX(sx), py = toY(sy);
+
+      ctx.save();
+      ctx.beginPath();
+      ctx.ellipse(px, py, s.turb_r * cellW, s.turb_r * cellH, 0, 0, Math.PI * 2);
+      ctx.fillStyle = "rgba(147, 197, 253, 0.16)";
+      ctx.fill();
+      ctx.setLineDash([5, 4]);
+      ctx.strokeStyle = "#3B82F6";
+      ctx.lineWidth = 1.3;
+      ctx.stroke();
+      ctx.restore();
+
+      ctx.beginPath();
+      ctx.ellipse(px, py, s.core_r * cellW, s.core_r * cellH, 0, 0, Math.PI * 2);
+      ctx.fillStyle = "rgba(29, 78, 216, 0.36)";
+      ctx.fill();
+      ctx.strokeStyle = "#1E3A8A";
+      ctx.lineWidth = 1.5;
+      ctx.stroke();
+
+      drawArrow(ctx, px, py, toX(sx + s.vx * 3.5), toY(sy + s.vy * 3.5), "#1E3A8A", 1.6);
+    }
+
+    // Wind badge (top-left of plot)
+    const wn = Math.hypot(data.wind[0], data.wind[1]);
+    if (wn > 1e-6) {
+      const ux = data.wind[0] / wn, uy = data.wind[1] / wn;
+      const wx0 = plot.x + 16, wy0 = plot.y + 30;
+      drawLabel(ctx, `Angin ${Math.round(data.wind[2])} m/s`, plot.x + 48, plot.y + 14, "rgba(255,255,255,0.92)", "#CBD5E1", "#0F172A");
+      drawArrow(ctx, wx0, wy0, wx0 + ux * 24, wy0 - uy * 24, "#334155", 1.7);
+    }
+
+    // Drone paths & markers
+    for (const d of data.drones) {
+      const d0 = startDrones[d.id] || d.pos;
+      const dx = d0[0] + (d.pos[0] - d0[0]) * p;
+      const dy = d0[1] + (d.pos[1] - d0[1]) * p;
+      cache.prevDrones[d.id] = [dx, dy];
+
+      if (d.planned.length >= 2) {
+        ctx.save();
+        ctx.setLineDash([2, 4]);
+        ctx.strokeStyle = d.color;
+        ctx.globalAlpha = 0.30;
+        ctx.lineWidth = 1.3;
+        ctx.beginPath();
+        ctx.moveTo(toX(d.planned[0][0]), toY(d.planned[0][1]));
+        for (let i = 1; i < d.planned.length; i++) ctx.lineTo(toX(d.planned[i][0]), toY(d.planned[i][1]));
+        ctx.stroke();
+        ctx.restore();
+      }
+      if (d.rem.length >= 2) {
+        ctx.save();
+        ctx.setLineDash([5, 4]);
+        ctx.strokeStyle = d.color;
+        ctx.globalAlpha = 0.72;
+        ctx.lineWidth = 1.6;
+        ctx.beginPath();
+        ctx.moveTo(toX(dx), toY(dy));
+        for (let i = 1; i < d.rem.length; i++) ctx.lineTo(toX(d.rem[i][0]), toY(d.rem[i][1]));
+        ctx.stroke();
+        ctx.restore();
+      }
+      if (d.trail.length >= 1) {
+        ctx.strokeStyle = d.color;
+        ctx.lineWidth = 2.4;
+        ctx.beginPath();
+        ctx.moveTo(toX(d.trail[0][0]), toY(d.trail[0][1]));
+        for (let i = 1; i < d.trail.length; i++) ctx.lineTo(toX(d.trail[i][0]), toY(d.trail[i][1]));
+        ctx.lineTo(toX(dx), toY(dy));
+        ctx.stroke();
+      }
+    }
+
+    // Depots
+    for (const dep of data.depots) {
+      const px = toX(dep.x), py = toY(dep.y);
+      ctx.fillStyle = "#0F172A";
+      ctx.strokeStyle = "#FFFFFF";
+      ctx.lineWidth = 1.8;
+      ctx.fillRect(px - 6, py - 6, 12, 12);
+      ctx.strokeRect(px - 6, py - 6, 12, 12);
+      drawLabel(ctx, dep.name, px, py + 16, "rgba(255,255,255,0.92)", "#94A3B8", "#0F172A");
+    }
+
+    // Camps
+    for (const c of data.camps) {
+      const px = toX(c.x), py = toY(c.y);
+      ctx.beginPath();
+      ctx.arc(px, py, 5.5, 0, Math.PI * 2);
+      ctx.fillStyle = c.color;
+      ctx.fill();
+      ctx.strokeStyle = "#FFFFFF";
+      ctx.lineWidth = 1.4;
+      ctx.stroke();
+      drawLabel(ctx, `P${c.id} (${c.urg_short})`, px, py - 14, "rgba(255,255,255,0.90)", c.color, "#0F172A");
+    }
+
+    // Drones on top
+    for (const d of data.drones) {
+      const cur = cache.prevDrones[d.id] || d.pos;
+      const px = toX(cur[0]), py = toY(cur[1]);
+      const isDead = d.state === "Out of Battery";
+      const isHold = d.state === "Stay at Depot" || d.state === "Stay at Posko";
+      const col = isDead ? "#B91C1C" : (isHold ? "#B45309" : d.color);
+      const badge = isDead ? `D${d.id} 0%` : (isHold ? `D${d.id} HOLD` : `D${d.id}`);
+
+      ctx.fillStyle = col;
+      ctx.strokeStyle = "#FFFFFF";
+      ctx.lineWidth = 1.5;
+      if (isDead) {
+        ctx.beginPath();
+        ctx.moveTo(px - 6, py - 6); ctx.lineTo(px + 6, py + 6);
+        ctx.moveTo(px + 6, py - 6); ctx.lineTo(px - 6, py + 6);
+        ctx.strokeStyle = col;
+        ctx.lineWidth = 3;
+        ctx.stroke();
+      } else if (isHold) {
+        ctx.fillRect(px - 5.5, py - 5.5, 11, 11);
+        ctx.strokeRect(px - 5.5, py - 5.5, 11, 11);
+      } else {
+        ctx.beginPath();
+        ctx.moveTo(px, py - 7.5);
+        ctx.lineTo(px + 6.5, py + 5.5);
+        ctx.lineTo(px - 6.5, py + 5.5);
+        ctx.closePath();
+        ctx.fill();
+        ctx.stroke();
+      }
+      drawLabel(ctx, badge, px, py + 15, col, null, "#FFFFFF");
+    }
+
+    // Compact legend footer
+    const legendItems = [
+      ["#0F172A", "Depot"],
+      ["#DC2626", "Posko Kritis"],
+      ["#15803D", "Terkirim"],
+      ["#1D4ED8", "Inti Badai"],
+      ["#EA580C", "Api Aktif"],
+      ["#94A3B8", "Bekas Api"],
+    ];
+    let lx = plot.x;
+    const ly = h - 14;
+    ctx.font = "500 10.5px system-ui, -apple-system, sans-serif";
+    ctx.textAlign = "left";
+    ctx.textBaseline = "middle";
+    for (const [col, lbl] of legendItems) {
+      ctx.fillStyle = col;
+      ctx.fillRect(lx, ly - 4, 9, 9);
+      ctx.fillStyle = "#334155";
+      ctx.fillText(lbl, lx + 13, ly + 0.5);
+      lx += 13 + ctx.measureText(lbl).width + 16;
+    }
+
+    if (p < 1) {
+      cache.rafId = requestAnimationFrame(renderFrame);
+    } else {
+      cache.rafId = null;
+    }
+  };
+
+  cache.rafId = requestAnimationFrame(renderFrame);
+
+  return () => {
+    if (cache.rafId) {
+      cancelAnimationFrame(cache.rafId);
+      cache.rafId = null;
+    }
+  };
+}
+"""
+
+MAP_CANVAS = st.components.v2.component(
+    "aerorelief_map_canvas",
+    html=_MAP_CANVAS_HTML,
+    css=_MAP_CANVAS_CSS,
+    js=_MAP_CANVAS_JS,
+)
+
+
+def build_map_payload(
+    sim: AeroReliefSimulator,
+    terrain_key: str,
+    playing: bool,
+    interp_ms: int,
+    snap: bool,
+) -> dict:
     env = sim.env
-    fig, ax = plt.subplots(figsize=(8.6, 7.6), dpi=130)
+    elev_bytes = (env.elevation_grid / 10.0).clip(0, 255).astype(np.uint8).tobytes()
+    elev_b64 = base64.b64encode(elev_bytes).decode("ascii")
 
-    # 2.5D Elevation Heatmap + Contours
-    im = ax.imshow(
-        env.elevation_grid,
-        origin="lower",
-        cmap="YlGn",
-        alpha=0.55,
-        vmin=0.0,
-        vmax=max(160.0, float(env.elevation_grid.max())),
-        extent=[-0.5, env.width - 0.5, -0.5, env.height - 0.5],
-    )
-    if float(env.elevation_grid.max()) > 10.0:
-        ax.contour(
-            np.arange(env.width),
-            np.arange(env.height),
-            env.elevation_grid,
-            levels=6,
-            colors="#15803d",
-            alpha=0.35,
-            linewidths=0.7,
-        )
-    cbar = fig.colorbar(im, ax=ax, fraction=0.036, pad=0.02)
-    cbar.set_label("Elevasi Medan (m)", fontsize=9)
-
-    # Static No-Fly Zones
-    nfz_y, nfz_x = np.where(env.static_obstacles)
-    if len(nfz_x) > 0:
-        ax.scatter(nfz_x, nfz_y, marker="s", s=38, color="#475569", alpha=0.85, label="No-Fly Zone Statis")
-
-    # Exceeding ceiling zones
-    ceil_y, ceil_x = np.where(env.elevation_grid > env.max_altitude_m)
-    if len(ceil_x) > 0:
-        ax.scatter(ceil_x, ceil_y, marker="^", s=26, color="#78350f", alpha=0.75, label="Elevasi > Plafon")
-
-    # Wildfire / Karhutla cells
-    burned_x, burned_y, fire_x, fire_y = [], [], [], []
+    burned: List[List[int]] = []
+    fires: List[List[int]] = []
     for f in env.wildfires:
         if not f.active:
             continue
         for cx, cy in f.burned_cells:
-            burned_x.append(cx)
-            burned_y.append(cy)
+            burned.append([int(cx), int(cy)])
         for cx, cy in f.active_fire_cells:
-            fire_x.append(cx)
-            fire_y.append(cy)
-    if burned_x:
-        ax.scatter(burned_x, burned_y, marker="s", s=34, color="#64748b", alpha=0.6, label="Karhutla (Hangus/Asap)")
-    if fire_x:
-        ax.scatter(fire_x, fire_y, marker="s", s=42, color="#f97316", edgecolors="#b91c1c", linewidths=0.7, alpha=0.92, label="Karhutla (Api Aktif)")
+            fires.append([int(cx), int(cy)])
 
-    # Moving Weather Storm Cells
-    for idx, storm in enumerate(env.storms):
-        if not storm.active:
-            continue
-        turb_circle = patches.Circle(
-            storm.center,
-            storm.turbulence_radius,
-            edgecolor="#2563eb",
-            facecolor="#60a5fa",
-            alpha=0.18,
-            linestyle="--",
-            linewidth=1.5,
-            label="Turbulensi Cuaca" if idx == 0 else "",
-        )
-        core_circle = patches.Circle(
-            storm.center,
-            storm.core_radius,
-            edgecolor="#1e3a8a",
-            facecolor="#1d4ed8",
-            alpha=0.45,
-            linewidth=1.8,
-            label="Inti Cuaca Buruk" if idx == 0 else "",
-        )
-        ax.add_patch(turb_circle)
-        ax.add_patch(core_circle)
-        ax.annotate(
-            "",
-            xy=(storm.center[0] + storm.velocity[0] * 4.0, storm.center[1] + storm.velocity[1] * 4.0),
-            xytext=storm.center,
-            arrowprops=dict(arrowstyle="->", color="#1e3a8a", lw=2.0),
-        )
+    storms = [
+        {
+            "id": s.id,
+            "center": [float(s.center[0]), float(s.center[1])],
+            "core_r": float(s.core_radius),
+            "turb_r": float(s.turbulence_radius),
+            "vx": float(s.velocity[0]),
+            "vy": float(s.velocity[1]),
+        }
+        for s in env.storms
+        if s.active
+    ]
 
-    # Wind Direction Indicator (top-left)
-    wx, wy, w_spd = env.wind_vector
-    wn = math.hypot(wx, wy)
-    if wn > 1e-6:
-        ux, uy = wx / wn, wy / wn
-        ox, oy = env.width * 0.08, env.height * 0.92
-        ax.annotate(
-            f"Angin {w_spd:.0f} m/s",
-            xy=(ox + ux * env.width * 0.08, oy + uy * env.height * 0.08),
-            xytext=(ox, oy),
-            arrowprops=dict(arrowstyle="->", color="#0f172a", lw=2.0),
-            fontsize=8,
-            fontweight="bold",
-            bbox=dict(boxstyle="round,pad=0.25", fc="white", ec="#cbd5e1", alpha=0.85),
-        )
-
-    # Planned vs Flown Trails + Drones
+    drones = []
     for did, ds in sim.drone_states.items():
-        col = DRONE_COLORS[(did - 1) % len(DRONE_COLORS)]
-        if ds.planned_full_path:
-            px = [p[0] for p in ds.planned_full_path]
-            py = [p[1] for p in ds.planned_full_path]
-            ax.plot(px, py, linestyle=":", linewidth=1.3, color=col, alpha=0.45)
-
-        if ds.active_waypoints and ds.waypoint_idx < len(ds.active_waypoints):
-            rem = ds.active_waypoints[ds.waypoint_idx :]
-            ax.plot([p[0] for p in rem], [p[1] for p in rem], linestyle="--", linewidth=1.8, color=col, alpha=0.75)
-
-        if len(ds.trail) >= 2:
-            tx = [p[0] for p in ds.trail]
-            ty = [p[1] for p in ds.trail]
-            ax.plot(tx, ty, linestyle="-", linewidth=2.5, color=col, label=f"Drone #{did} ({ds.state})")
-
-        # Drone Marker
-        is_dead = ds.state == "Out of Battery"
-        is_holding = ds.state in ("Stay at Depot", "Stay at Posko")
-        marker_shape = "X" if is_dead else ("s" if is_holding else "^")
-        marker_col = "#dc2626" if is_dead else ("#d97706" if is_holding else col)
-        badge_lbl = f"D{did} [0%]" if is_dead else (f"D{did} [STAY]" if is_holding else f"D{did}")
-        ax.scatter(
-            [ds.current_pos[0]],
-            [ds.current_pos[1]],
-            marker=marker_shape,
-            s=165 if is_dead else 140,
-            color=marker_col,
-            edgecolors="white",
-            linewidths=1.4,
-            zorder=8,
-        )
-        ax.text(
-            ds.current_pos[0],
-            ds.current_pos[1] - max(1.2, env.height * 0.032),
-            badge_lbl,
-            fontsize=8,
-            fontweight="bold",
-            color="white",
-            ha="center",
-            bbox=dict(boxstyle="round,pad=0.18", fc=marker_col, ec="none", alpha=0.9),
-            zorder=9,
+        rem = ds.active_waypoints[ds.waypoint_idx :] if ds.active_waypoints else []
+        drones.append(
+            {
+                "id": did,
+                "pos": [int(ds.current_pos[0]), int(ds.current_pos[1])],
+                "state": ds.state,
+                "color": DRONE_COLORS[(did - 1) % len(DRONE_COLORS)],
+                "planned": [[int(p[0]), int(p[1])] for p in ds.planned_full_path],
+                "rem": [[int(p[0]), int(p[1])] for p in rem],
+                "trail": [[int(p[0]), int(p[1])] for p in ds.trail],
+            }
         )
 
-    # Depots
-    for d in sim.depots.values():
-        ax.scatter(
-            [d.position[0]],
-            [d.position[1]],
-            marker="s",
-            s=150,
-            color="#0f172a",
-            edgecolors="#facc15",
-            linewidths=1.8,
-            zorder=7,
-        )
-        ax.text(
-            d.position[0],
-            d.position[1] - max(1.3, env.height * 0.035),
-            d.name,
-            fontsize=8,
-            fontweight="bold",
-            ha="center",
-            bbox=dict(boxstyle="round,pad=0.18", fc="white", ec="#0f172a", alpha=0.85),
-            zorder=7,
-        )
-
-    # Camps
+    camps = []
     for c in sim.camps.values():
-        uc = URGENCY_COLORS.get(c.urgency, "#2563eb")
         if c.status.startswith("Delivered"):
-            marker_face = "#16a34a"
+            col = "#15803D"
         elif c.status == "Unreachable":
-            marker_face = "#6b7280"
+            col = "#64748B"
         else:
-            marker_face = uc
-        ax.scatter(
-            [c.position[0]],
-            [c.position[1]],
-            marker="o",
-            s=95,
-            color=marker_face,
-            edgecolors="white",
-            linewidths=1.3,
-            zorder=6,
-        )
-        ax.text(
-            c.position[0],
-            c.position[1] + max(0.9, env.height * 0.024),
-            f"P{c.id} [{c.urgency[0]}]",
-            fontsize=8,
-            fontweight="bold",
-            ha="center",
-            color="#0f172a",
-            bbox=dict(boxstyle="round,pad=0.12", fc="white", ec=marker_face, alpha=0.8),
-            zorder=6,
+            col = URGENCY_COLORS.get(c.urgency, "#1D4ED8")
+        camps.append(
+            {
+                "id": c.id,
+                "x": int(c.position[0]),
+                "y": int(c.position[1]),
+                "urg_short": c.urgency[0],
+                "color": col,
+            }
         )
 
-    ax.set_xlim(-0.5, env.width - 0.5)
-    ax.set_ylim(-0.5, env.height - 0.5)
-    ax.set_xlabel(f"Koordinat X ({env.cell_size_m:.0f} m/petak — Lebar {env.width * env.cell_size_m / 1000:.1f} km)")
-    ax.set_ylabel(f"Koordinat Y ({env.cell_size_m:.0f} m/petak — Tinggi {env.height * env.cell_size_m / 1000:.1f} km)")
-    ax.set_title(f"Peta Operasi 2.5D AeroRelief | Waktu Simulasi t = {sim.sim_time_min:.1f} menit", fontweight="bold")
-    ax.grid(True, linestyle="--", alpha=0.35)
-    ax.legend(loc="upper right", fontsize=7.5, framealpha=0.9)
-    plt.tight_layout()
-    return fig
+    depots = [
+        {"id": d.id, "name": d.name, "x": int(d.position[0]), "y": int(d.position[1])}
+        for d in sim.depots.values()
+    ]
+
+    return {
+        "terrain_key": terrain_key,
+        "width": int(env.width),
+        "height": int(env.height),
+        "cell_size_m": float(env.cell_size_m),
+        "max_alt": float(env.max_altitude_m),
+        "max_elev": float(env.elevation_grid.max()) if env.elevation_grid.size else 160.0,
+        "elev_b64": elev_b64,
+        "wind": [float(env.wind_vector[0]), float(env.wind_vector[1]), float(env.wind_vector[2])],
+        "sim_time_min": float(sim.sim_time_min),
+        "burned": burned,
+        "fires": fires,
+        "storms": storms,
+        "drones": drones,
+        "camps": camps,
+        "depots": depots,
+        "playing": bool(playing),
+        "interp_ms": int(interp_ms),
+        "snap": bool(snap),
+    }
 
 
 def inject_hazard_ahead_of_drone(sim: AeroReliefSimulator, hazard_type: str) -> None:
@@ -502,113 +974,144 @@ def inject_hazard_ahead_of_drone(sim: AeroReliefSimulator, hazard_type: str) -> 
             active=True,
         )
         fire.ignite_zone(cx - 1, cx + 1, cy - 1, cy + 1, sim.env.width, sim.env.height)
-        for d in sim.depots.values():
-            fire.active_fire_cells.discard(d.position)
-        for c in sim.camps.values():
-            fire.active_fire_cells.discard(c.position)
+        protected = {d.position for d in sim.depots.values()} | {c.position for c in sim.camps.values()}
+        fire.active_fire_cells.difference_update(protected)
         sim.env.add_wildfire(fire)
         sim.events.append(f"[t={sim.sim_time_min:.1f}m] INJEKSI: Titik Api Karhutla baru muncul di {label}!")
 
     # Immediately run re-routing check so the user sees instant response even when paused
     for did, ds in sim.drone_states.items():
-        if ds.state not in ("Standby", "Completed", "Out of Battery"):
+        if ds.state not in ("Standby", "Completed", "Out of Battery", "Stay at Depot", "Stay at Posko"):
             sim._check_and_reroute(ds, sim.drones_cfg[did])
 
 
 # ==============================================================================
 # UI HEADER & SIDEBAR CONFIGURATION
 # ==============================================================================
-st.title("🚁 AeroRelief 2.5D: Emergency Medical Drone Logistics Simulator")
-st.caption("Implementasi PRD.md — A* 2.5D + Multi-Depot VRPTW-BL Genetic Algorithm + Dynamic Weather & Wildfire Re-routing")
+st.markdown(
+    """
+    <div class="ar-header">
+        <h1 class="ar-title">AeroRelief 2.5D</h1>
+        <p class="ar-subtitle">Simulasi distribusi logistik medis multi-depot dengan jalur A* 2.5D dan optimasi rute GA.</p>
+    </div>
+    """,
+    unsafe_allow_html=True,
+)
 
 with st.sidebar:
-    st.header("1. Lingkungan & Skala 2.5D")
+    st.subheader("Peta & Penempatan")
     if "terrain_seed" not in st.session_state:
-        st.session_state.terrain_seed = 42
+        st.session_state.terrain_seed = random.randint(1, 99999)
+    if "layout_seed" not in st.session_state:
+        st.session_state.layout_seed = random.randint(1, 99999)
 
-    grid_size = st.slider("Ukuran Grid (N × N, maks 100)", min_value=20, max_value=100, value=50, step=10)
+    grid_size = st.slider("Ukuran Grid (N x N)", min_value=20, max_value=100, value=50, step=10)
     cell_scale_label = st.selectbox(
-        "Skala Horizontal per Petak",
+        "Skala per Petak",
         options=["100 m/petak", "200 m/petak", "500 m/petak", "1000 m/petak (1 km)"],
         index=1,
     )
     cell_size_m = float(cell_scale_label.split()[0])
-    max_altitude_m = st.slider("Plafon Terbang Maksimum (m)", min_value=80, max_value=250, value=160, step=10)
+    max_altitude_m = st.slider("Plafon Terbang (m)", min_value=80, max_value=250, value=160, step=10)
 
-    if st.button("🎲 Acak Peta Perlin Noise", width="stretch"):
+    c_rand1, c_rand2 = st.columns(2)
+    if c_rand1.button("Acak Peta", width="stretch"):
         st.session_state.terrain_seed = random.randint(1, 99999)
         st.rerun()
+    if c_rand2.button("Acak Posisi", width="stretch"):
+        st.session_state.layout_seed = random.randint(1, 99999)
+        st.rerun()
+    if st.button("Acak Semua (Peta & Posisi)", width="stretch"):
+        st.session_state.terrain_seed = random.randint(1, 99999)
+        st.session_state.layout_seed = random.randint(1, 99999)
+        st.rerun()
     terrain_seed = int(st.session_state.terrain_seed)
-    st.caption(f"Peta Elevasi Perlin Noise (kelipatan 10 m) — Seed #{terrain_seed}")
+    layout_seed = int(st.session_state.layout_seed)
+    st.caption(f"Seed peta: #{terrain_seed} | Seed posisi: #{layout_seed}")
 
-    c_w1, c_w2, c_w3 = st.columns(3)
-    wind_dx = c_w1.number_input("Angin dX", value=1.0, step=0.2, format="%.1f")
-    wind_dy = c_w2.number_input("Angin dY", value=0.4, step=0.2, format="%.1f")
-    wind_speed = c_w3.number_input("Laju (m/s)", min_value=0.0, max_value=25.0, value=9.0, step=1.0)
-
-    st.header("2. Dynamic Obstacles Awal")
-    storm_on = st.checkbox("Aktifkan Cuaca Buruk Bergerak", value=True)
-    storm_pen = st.slider("Penalti Turbulensi Badai", 1.2, 3.0, 1.85, 0.05) if storm_on else 1.85
-    fire_on = st.checkbox("Aktifkan Daerah Api / Karhutla", value=True)
+    st.divider()
+    st.subheader("Obstacle Dinamis Awal")
+    storm_on = st.checkbox("Badai bergerak", value=True)
+    storm_pen = st.slider("Penalti turbulensi", 1.2, 3.0, 1.85, 0.05) if storm_on else 1.85
+    fire_on = st.checkbox("Api Karhutla", value=True)
     if fire_on:
-        fire_prob = st.slider("Laju Rambat Api Karhutla", 0.10, 0.60, 0.28, 0.02)
-        fire_max_cells = st.slider("Batas Maksimum Area Api (petak)", 8, 40, 18, 2)
-        fire_dir_choice = st.selectbox("Arah Gerak Api Karhutla", ["Kanan (+X)", "Kiri (-X)", "Ikuti Angin"], index=0)
+        fire_prob = st.slider("Laju rambat api", 0.10, 0.60, 0.28, 0.02)
+        fire_max_cells = st.slider("Batas area api (petak)", 8, 40, 18, 2)
+        fire_dir_choice = st.selectbox("Arah gerak api", ["Kanan (+X)", "Kiri (-X)", "Ikuti Angin"], index=0)
     else:
         fire_prob, fire_max_cells, fire_dir_choice = 0.28, 18, "Kanan (+X)"
 
-    st.header("3. Armada Drone & Parameter GA")
-    num_drones = st.slider("Jumlah Armada Drone", min_value=1, max_value=6, value=3)
+    storm_core_r = max(2.0, grid_size * 0.055)
+    storm_turb_r = max(4.0, grid_size * 0.11)
+    initial_layout = generate_random_scenario_layout(
+        width=grid_size,
+        height=grid_size,
+        seed=layout_seed,
+        storm_core_radius=storm_core_r,
+        storm_turb_radius=storm_turb_r,
+    )
+    init_storm_x, init_storm_y = initial_layout["storm_center"]
+    init_fire_x, init_fire_y = initial_layout["fire_center"]
+    st.caption(
+        f"Posisi awal: badai ({int(init_storm_x)}, {int(init_storm_y)}), api ({init_fire_x}, {init_fire_y})"
+    )
+
+    st.divider()
+    st.subheader("Armada Drone")
+    num_drones = st.slider("Jumlah Drone", min_value=1, max_value=6, value=3)
     max_battery_wh = st.slider("Kapasitas Baterai (Wh)", min_value=40, max_value=800, value=350, step=10)
-    max_payload_kg = st.slider("Muatan Maksimal / Drone (kg)", min_value=2.0, max_value=15.0, value=8.0, step=0.5)
-    speed_mps = st.slider("Kecepatan Jelajah Drone (m/s)", min_value=8.0, max_value=30.0, value=18.0, step=1.0)
-    climb_penalty = st.slider("Bobot Penalti Menanjak (A*)", min_value=0.5, max_value=5.0, value=2.5, step=0.25)
+    max_payload_kg = st.slider("Muatan Maksimal (kg)", min_value=2.0, max_value=15.0, value=8.0, step=0.5)
+    speed_mps = st.slider("Kecepatan Jelajah (m/s)", min_value=8.0, max_value=30.0, value=18.0, step=1.0)
 
-    pop_size = st.slider("Populasi GA", 20, 120, 50, 10)
-    generations = st.slider("Generasi GA", 20, 150, 70, 10)
-    alpha = st.number_input("Bobot α (Jarak/Energi)", value=1.0, min_value=0.1, step=0.5)
-    beta = st.number_input("Bobot β (Keterlambatan)", value=2.5, min_value=0.1, step=0.5)
-    gamma = st.number_input("Bobot γ (Pelanggaran Kapasitas)", value=15.0, min_value=1.0, step=1.0)
-
-
-# Interactive Editor for Depots and Camps (Static NFZ disabled per user request)
-def _sx(frac: float) -> int:
-    return max(1, min(grid_size - 2, int(round(frac * (grid_size - 1)))))
-
-
-def _sy(frac: float) -> int:
-    return max(1, min(grid_size - 2, int(round(frac * (grid_size - 1)))))
+    with st.expander("Parameter Lanjutan A* & GA", expanded=False):
+        c_w1, c_w2, c_w3 = st.columns(3)
+        wind_dx = c_w1.number_input("Angin dX", value=1.0, step=0.2, format="%.1f")
+        wind_dy = c_w2.number_input("Angin dY", value=0.4, step=0.2, format="%.1f")
+        wind_speed = c_w3.number_input("Laju (m/s)", min_value=0.0, max_value=25.0, value=9.0, step=1.0)
+        climb_penalty = st.slider("Penalti Menanjak (A*)", min_value=0.5, max_value=5.0, value=2.5, step=0.25)
+        pop_size = st.slider("Populasi GA", 20, 120, 50, 10)
+        generations = st.slider("Generasi GA", 20, 150, 70, 10)
+        alpha = st.number_input("Bobot Alpha (Jarak/Energi)", value=1.0, min_value=0.1, step=0.5)
+        beta = st.number_input("Bobot Beta (Keterlambatan)", value=2.5, min_value=0.1, step=0.5)
+        gamma = st.number_input("Bobot Gamma (Pelanggaran)", value=15.0, min_value=1.0, step=1.0)
 
 
-with st.expander("🗺️ Editor Peta Interaktif: Multi-Depot & Posko (Urgensi & Time Window)", expanded=False):
+with st.expander("Konfigurasi Depot & Posko (Koordinat, Muatan, Urgensi)", expanded=False):
     tab_depots, tab_camps = st.tabs(["Depot / Basecamp", "Posko Bencana"])
 
     default_depots_df = pd.DataFrame(
         [
-            {"id": 1, "nama": "Depot Barat", "x": _sx(0.08), "y": _sy(0.10)},
-            {"id": 2, "nama": "Depot Timur", "x": _sx(0.90), "y": _sy(0.14)},
+            {"id": d.id, "nama": d.name, "x": d.position[0], "y": d.position[1]}
+            for d in initial_layout["depots"]
         ]
     )
     default_camps_df = pd.DataFrame(
         [
-            {"id": 1, "nama": "Posko 1", "x": _sx(0.18), "y": _sy(0.76), "demand_kg": 2.5, "urgency": "CRITICAL", "time_window_min": 14.0},
-            {"id": 2, "nama": "Posko 2", "x": _sx(0.42), "y": _sy(0.84), "demand_kg": 2.0, "urgency": "HIGH", "time_window_min": 22.0},
-            {"id": 3, "nama": "Posko 3", "x": _sx(0.82), "y": _sy(0.82), "demand_kg": 2.5, "urgency": "CRITICAL", "time_window_min": 16.0},
-            {"id": 4, "nama": "Posko 4", "x": _sx(0.14), "y": _sy(0.44), "demand_kg": 1.5, "urgency": "NORMAL", "time_window_min": 30.0},
-            {"id": 5, "nama": "Posko 5", "x": _sx(0.56), "y": _sy(0.18), "demand_kg": 2.0, "urgency": "HIGH", "time_window_min": 20.0},
-            {"id": 6, "nama": "Posko 6", "x": _sx(0.78), "y": _sy(0.56), "demand_kg": 2.0, "urgency": "HIGH", "time_window_min": 24.0},
-            {"id": 7, "nama": "Posko 7", "x": _sx(0.32), "y": _sy(0.24), "demand_kg": 1.5, "urgency": "NORMAL", "time_window_min": 28.0},
-            {"id": 8, "nama": "Posko 8", "x": _sx(0.62), "y": _sy(0.72), "demand_kg": 2.5, "urgency": "CRITICAL", "time_window_min": 18.0},
+            {
+                "id": c.id,
+                "nama": f"Posko {c.id}",
+                "x": c.position[0],
+                "y": c.position[1],
+                "demand_kg": c.demand_kg,
+                "urgency": c.urgency,
+                "time_window_min": c.time_window_end_min,
+            }
+            for c in initial_layout["camps"]
         ]
     )
 
     with tab_depots:
-        depots_df = st.data_editor(default_depots_df, num_rows="dynamic", key=f"depots_ed_{grid_size}", width="stretch")
+        depots_df = st.data_editor(
+            default_depots_df,
+            num_rows="dynamic",
+            key=f"depots_ed_{grid_size}_{layout_seed}",
+            width="stretch",
+        )
     with tab_camps:
         camps_df = st.data_editor(
             default_camps_df,
             num_rows="dynamic",
-            key=f"camps_ed_{grid_size}",
+            key=f"camps_ed_{grid_size}_{layout_seed}",
             column_config={
                 "urgency": st.column_config.SelectboxColumn("Urgensi", options=["CRITICAL", "HIGH", "NORMAL"], required=True),
             },
@@ -625,7 +1128,8 @@ depots_tuple = tuple(
     for _, row in depots_df.dropna().iterrows()
 )
 if not depots_tuple:
-    depots_tuple = ((1, "Depot Default", _sx(0.1), _sy(0.1)),)
+    fallback_xy = max(1, grid_size // 10)
+    depots_tuple = ((1, "Depot Default", fallback_xy, fallback_xy),)
 
 camps_tuple = tuple(
     (
@@ -649,8 +1153,8 @@ elif fire_dir_choice == "Kiri (-X)":
 else:
     fire_move_dir = 1.0 if wind_dx >= 0 else -1.0
 
-storm_cfg = (storm_on, float(_sx(0.22)), float(_sy(0.32)), max(2.0, grid_size * 0.055), max(4.0, grid_size * 0.11), storm_pen)
-fire_cfg = (fire_on, _sx(0.64), _sy(0.46), fire_prob, fire_max_cells, fire_move_dir)
+storm_cfg = (storm_on, float(init_storm_x), float(init_storm_y), storm_core_r, storm_turb_r, storm_pen)
+fire_cfg = (fire_on, int(init_fire_x), int(init_fire_y), fire_prob, fire_max_cells, fire_move_dir)
 
 plan_key = (
     grid_size, grid_size, cell_size_m, max_altitude_m, terrain_seed,
@@ -659,98 +1163,217 @@ plan_key = (
     speed_mps, climb_penalty, pop_size, generations, alpha, beta, gamma,
 )
 
-plan = solve_initial_plan(*plan_key)
-
-if st.session_state.get("plan_key") != plan_key or "sim" not in st.session_state:
-    st.session_state.plan_key = plan_key
-    st.session_state.sim = clone_simulator_from_plan(plan)
-    st.session_state.playing = False
-
-sim: AeroReliefSimulator = st.session_state.sim
-
-# ==============================================================================
-# SIMULATION CONTROLS & KPI BAR
-# ==============================================================================
-ctrl_cols = st.columns([1.1, 1.0, 1.1, 1.1, 1.6, 1.8])
-if ctrl_cols[0].button("▶️ Play" if not st.session_state.playing else "⏸️ Pause", width="stretch"):
-    st.session_state.playing = not st.session_state.playing
-    st.rerun()
-if ctrl_cols[1].button("⏭️ +1 Tick", width="stretch"):
-    st.session_state.playing = False
-    sim.step(dt_min=0.5)
-if ctrl_cols[2].button("⏩ +5 Ticks", width="stretch"):
-    st.session_state.playing = False
-    for _ in range(5):
-        sim.step(dt_min=0.5)
-if ctrl_cols[3].button("🔄 Reset", width="stretch"):
-    st.session_state.playing = False
-    st.session_state.sim = clone_simulator_from_plan(plan)
-    st.rerun()
-if ctrl_cols[4].button("⛈️ Suntik Badai di Jalur", width="stretch"):
-    inject_hazard_ahead_of_drone(sim, "storm")
-if ctrl_cols[5].button("🔥 Suntik Api Karhutla di Jalur", width="stretch"):
-    inject_hazard_ahead_of_drone(sim, "fire")
-
-# KPI Cards
-delivered_on_time = sum(1 for c in sim.camps.values() if c.status == "Delivered On-Time")
-delivered_late = sum(1 for c in sim.camps.values() if c.status == "Delivered Late")
-total_reroutes = sum(ds.reroute_count for ds in sim.drone_states.values())
-
-k1, k2, k3, k4, k5 = st.columns(5)
-k1.metric("Waktu Simulasi", f"{sim.sim_time_min:.1f} mnt")
-k2.metric("Terkirim (On-Time / Late)", f"{delivered_on_time} / {delivered_late}", f"dari {len(sim.camps)} posko")
-k3.metric("Estimasi Jarak Awal GA", f"{plan['ga_metrics']['total_dist_km']:.2f} km")
-k4.metric("Re-routing A* Terpicu", f"{total_reroutes}×")
-k5.metric("Komputasi Awal (A* / GA)", f"{plan['t_matrix_ms']:.0f} / {plan['t_ga_ms']:.0f} ms")
-
-# ==============================================================================
-# MAIN LAYOUT: MAP (LEFT) & TELEMETRY (RIGHT)
-# ==============================================================================
-col_map, col_tel = st.columns([1.45, 1.0])
-
-with col_map:
-    fig = render_map_figure(sim)
-    st.pyplot(fig, width="stretch")
-    plt.close(fig)
-
-with col_tel:
-    st.subheader("📡 Telemetri Armada Drone")
-    for did, ds in sim.drone_states.items():
-        bat_pct = ds.remaining_battery_pct
-        target_lbl = ds.current_target_key or "Selesai / Standby"
-        with st.container(border=True):
-            c_a, c_b = st.columns([2, 1])
-            c_a.markdown(f"**Drone #{did}** — `{ds.state}` (Depot {ds.home_depot_id})")
-            c_b.markdown(f"Target: **{target_lbl}** | ETA: **{ds.eta_min:.1f} mnt**")
-            st.progress(int(round(bat_pct)), text=f"Baterai: {bat_pct:.1f}% ({ds.remaining_battery_wh:.0f}/{ds.max_battery_wh:.0f} Wh) | Muatan: {ds.current_payload_kg:.1f}/{ds.max_payload_kg:.1f} kg | Re-route: {ds.reroute_count}×")
-
-    st.subheader("🏥 Status Pengiriman Posko")
-    camp_rows = [
-        {
-            "Posko": c.name,
-            "Urgensi": c.urgency,
-            "Muatan": f"{c.demand_kg:.1f} kg",
-            "Batas": f"{c.time_window_end_min:.0f} mnt",
-            "Status": c.status,
-            "Tiba": f"{c.delivered_at_min:.1f} mnt" if c.delivered_at_min is not None else "-",
+if st.session_state.get("plan_key") != plan_key or "plan" not in st.session_state or "sim" not in st.session_state:
+    with st.spinner("Menghitung matriks jalur A* 2.5D & optimasi armada GA..."):
+        env_key = (
+            grid_size, grid_size, cell_size_m, max_altitude_m, terrain_seed,
+            wind_dx, wind_dy, wind_speed, depots_tuple, camps_tuple, nfz_tuple,
+            storm_cfg, fire_cfg, climb_penalty,
+        )
+        route_data = compute_cached_route_matrix(*env_key)
+        ga_data = solve_cached_ga_plan(
+            env_key,
+            route_data,
+            num_drones,
+            max_battery_wh,
+            max_payload_kg,
+            speed_mps,
+            climb_penalty,
+            pop_size,
+            generations,
+            alpha,
+            beta,
+            gamma,
+        )
+        plan = {
+            "env": route_data["env"],
+            "depots": route_data["depots"],
+            "camps": route_data["camps"],
+            "drones": ga_data["drones"],
+            "routes": ga_data["routes"],
+            "paths": route_data["paths"],
+            "ga_metrics": ga_data["ga_metrics"],
+            "t_matrix_ms": route_data["t_matrix_ms"],
+            "t_ga_ms": ga_data["t_ga_ms"],
         }
-        for c in sim.camps.values()
-    ]
-    st.dataframe(pd.DataFrame(camp_rows), hide_index=True, width="stretch")
+    st.session_state.plan_key = plan_key
+    st.session_state.plan = plan
+    st.session_state.sim = clone_simulator_from_plan(plan)
+    st.session_state.playing = False
 
-    st.subheader("📜 Log Kejadian Misi")
-    st.text_area(
-        "Event Log",
-        value="\n".join(reversed(sim.events[-12:])),
-        height=160,
-        label_visibility="collapsed",
+
+# ==============================================================================
+# SIMULATION VIEWPORT FRAGMENT (Client-side Canvas: zero image reload or flicker)
+# ==============================================================================
+PLAY_INTERVAL_S = 0.45
+
+
+def _status_pill_class(state: str) -> str:
+    if state in ("Flying", "Re-routing", "Returning"):
+        return "ar-pill-active"
+    if state == "Completed":
+        return "ar-pill-ok"
+    if state in ("Stay at Depot", "Stay at Posko", "Low Battery"):
+        return "ar-pill-warn"
+    if state == "Out of Battery":
+        return "ar-pill-danger"
+    return "ar-pill-muted"
+
+
+@st.fragment(run_every=PLAY_INTERVAL_S if st.session_state.get("playing") else None)
+def render_simulation_viewport() -> None:
+    plan: dict = st.session_state.plan
+    sim: AeroReliefSimulator = st.session_state.sim
+    avg_speed = sum(c.speed_mps for c in sim.drones_cfg.values()) / max(1, len(sim.drones_cfg))
+    tick_dt_min = max(0.03, min(0.5, (0.65 * sim.env.cell_size_m / max(1.0, avg_speed)) / 60.0))
+
+    manual_action = False
+    snap_frame = False
+    ctrl_cols = st.columns([1.15, 1.0, 1.0, 0.95, 1.45, 1.45])
+    if ctrl_cols[0].button(
+        "Pause" if st.session_state.playing else "Play",
+        type="primary",
+        width="stretch",
+    ):
+        st.session_state.playing = not st.session_state.playing
+        st.rerun()
+    if ctrl_cols[1].button("+1 Tick", width="stretch"):
+        was_playing = st.session_state.playing
+        st.session_state.playing = False
+        manual_action = True
+        sim.step(dt_min=tick_dt_min)
+        if was_playing:
+            st.rerun()
+    if ctrl_cols[2].button("+5 Ticks", width="stretch"):
+        was_playing = st.session_state.playing
+        st.session_state.playing = False
+        manual_action = True
+        snap_frame = True
+        for _ in range(5):
+            sim.step(dt_min=tick_dt_min)
+        if was_playing:
+            st.rerun()
+    if ctrl_cols[3].button("Reset", width="stretch"):
+        was_playing = st.session_state.playing
+        st.session_state.playing = False
+        manual_action = True
+        snap_frame = True
+        st.session_state.sim = clone_simulator_from_plan(plan)
+        sim = st.session_state.sim
+        if was_playing:
+            st.rerun()
+    if ctrl_cols[4].button("Suntik Badai", width="stretch"):
+        manual_action = True
+        snap_frame = True
+        inject_hazard_ahead_of_drone(sim, "storm")
+    if ctrl_cols[5].button("Suntik Api", width="stretch"):
+        manual_action = True
+        snap_frame = True
+        inject_hazard_ahead_of_drone(sim, "fire")
+
+    if st.session_state.playing and not manual_action:
+        if sim.is_finished():
+            st.session_state.playing = False
+            st.rerun()
+        else:
+            sim.step(dt_min=tick_dt_min)
+
+    if not sim.camps:
+        st.info("Belum ada posko bencana pada daftar. Tambahkan minimal satu baris posko pada panel Konfigurasi Depot & Posko.")
+        return
+
+    unreachable_count = sum(1 for c in sim.camps.values() if c.status == "Unreachable")
+    if unreachable_count > 0:
+        st.warning(f"{unreachable_count} posko tidak memiliki jalur aman dari depot saat ini dan ditandai Unreachable.")
+
+    # KPI Strip (4 concise operational metrics)
+    delivered_on_time = sum(1 for c in sim.camps.values() if c.status == "Delivered On-Time")
+    delivered_late = sum(1 for c in sim.camps.values() if c.status == "Delivered Late")
+    total_reroutes = sum(ds.reroute_count for ds in sim.drone_states.values())
+
+    k1, k2, k3, k4 = st.columns(4)
+    k1.metric("Waktu Simulasi", f"{sim.sim_time_min:.2f} mnt")
+    k2.metric(
+        "Posko Terkirim",
+        f"{delivered_on_time + delivered_late} / {len(sim.camps)}",
+        f"Tepat waktu: {delivered_on_time} | Terlambat: {delivered_late}",
+    )
+    k3.metric("Jarak Rencana GA", f"{plan['ga_metrics']['total_dist_km']:.2f} km")
+    k4.metric(
+        "Re-routing A*",
+        f"{total_reroutes} kali",
+        f"A*: {plan['t_matrix_ms']:.0f} ms | GA: {plan['t_ga_ms']:.0f} ms",
     )
 
-# Auto-step loop when playing
-if st.session_state.playing:
-    if sim.is_finished():
-        st.session_state.playing = False
-    else:
-        sim.step(dt_min=0.5)
-        time.sleep(0.18)
-        st.rerun()
+    # MAIN WORKSPACE: MAP (LEFT) & TABBED CONSOLE (RIGHT)
+    col_map, col_tel = st.columns([1.5, 1.0], gap="medium")
+
+    with col_map:
+        terrain_sig = f"{sim.env.width}x{sim.env.height}_{sim.env.cell_size_m}_{sim.env.max_altitude_m}_{hash(st.session_state.plan_key[:6])}"
+        MAP_CANVAS(
+            key="aerorelief_map",
+            data=build_map_payload(
+                sim,
+                terrain_key=terrain_sig,
+                playing=st.session_state.playing,
+                interp_ms=int(PLAY_INTERVAL_S * 880),
+                snap=snap_frame or sim.sim_time_min == 0.0,
+            ),
+        )
+
+    with col_tel:
+        tab_fleet, tab_camps_status, tab_log = st.tabs(["Armada", "Posko", "Log Misi"])
+
+        with tab_fleet:
+            if not sim.drone_states:
+                st.info("Tidak ada drone aktif pada armada.")
+            for did, ds in sim.drone_states.items():
+                bat_pct = ds.remaining_battery_pct
+                target_lbl = ds.current_target_key or "Selesai / Standby"
+                pill_cls = _status_pill_class(ds.state)
+                st.markdown(
+                    f"""
+                    <div class="ar-drone-card">
+                        <div class="ar-drone-head">
+                            <span class="ar-drone-name">Drone #{did} (Depot {ds.home_depot_id})</span>
+                            <span class="ar-status-pill {pill_cls}">{ds.state}</span>
+                        </div>
+                        <div class="ar-drone-meta">
+                            Target: <strong>{target_lbl}</strong> | ETA: {ds.eta_min:.1f} mnt | Re-route: {ds.reroute_count}x
+                        </div>
+                    </div>
+                    """,
+                    unsafe_allow_html=True,
+                )
+                st.progress(
+                    int(round(bat_pct)),
+                    text=f"Baterai {bat_pct:.1f}% ({ds.remaining_battery_wh:.0f}/{ds.max_battery_wh:.0f} Wh) | Muatan {ds.current_payload_kg:.1f}/{ds.max_payload_kg:.1f} kg",
+                )
+
+        with tab_camps_status:
+            camp_rows = [
+                {
+                    "Posko": c.name,
+                    "Urgensi": c.urgency,
+                    "Muatan": f"{c.demand_kg:.1f} kg",
+                    "Batas": f"{c.time_window_end_min:.0f} mnt",
+                    "Status": c.status,
+                    "Tiba": f"{c.delivered_at_min:.1f} mnt" if c.delivered_at_min is not None else "-",
+                }
+                for c in sim.camps.values()
+            ]
+            st.dataframe(pd.DataFrame(camp_rows), hide_index=True, width="stretch", height=420)
+
+        with tab_log:
+            if not sim.events:
+                st.info("Belum ada kejadian misi yang tercatat.")
+            else:
+                st.text_area(
+                    "Log Kejadian Misi",
+                    value="\n".join(reversed(sim.events[-20:])),
+                    height=380,
+                    label_visibility="collapsed",
+                )
+
+
+render_simulation_viewport()
